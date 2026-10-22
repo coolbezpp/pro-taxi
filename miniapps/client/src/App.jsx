@@ -449,7 +449,7 @@ export default function App() {
       const res = await api("/orders", {
         method: "POST",
         body: {
-          passenger_id: 1,
+          client_id: 1,
           tariff_code: tariff,
           children: rideOptions.children,
           animals: rideOptions.animals,
@@ -524,7 +524,7 @@ export default function App() {
       const res = await api("/orders", {
         method: "POST",
         body: {
-          passenger_id: 1,
+          client_id: 1,
           service: "cargo",
           tariff_code: "cargo",
           from_address: cargoFrom,
@@ -571,7 +571,7 @@ export default function App() {
         method: "POST",
         body: {
           service_id: selectedService.id,
-          passenger_id: 1,
+          client_id: 1,
           from_address: masterAddress,
           to_address: "",
           scheduled_at: scheduled

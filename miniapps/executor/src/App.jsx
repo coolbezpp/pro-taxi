@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, setDriverToken } from "./api.js";
+import { api, setExecutorToken } from "./api.js";
 import { useTheme, maxPalette } from "./theme.js";
 
 // Штриховые SVG-иконки в едином стиле — как в клиентском приложении.
@@ -938,7 +938,7 @@ function WorkTimeCard({ work, t }) {
 }
 
 // ---------- Чат с клиентом по активному заказу ----------
-function DriverChat({ orderId, executorId, t, s }) {
+function ExecutorChat({ orderId, executorId, t, s }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -1115,7 +1115,7 @@ function ExecutorNotificationsPage({ me, t, m, onBack }) {
 }
 
 // ---------- Переписка с оператором ----------
-function DriverSupportPage({ me, t, m, onBack }) {
+function ExecutorSupportPage({ me, t, m, onBack }) {
   const [items, setItems] = useState(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -1548,7 +1548,7 @@ export default function App() {
         body: JSON.stringify({ initData, role: roleId })
       });
 
-      if (res?.token) setDriverToken(res.token);
+      if (res?.token) setExecutorToken(res.token);
       setMe(res);
       setActiveRole(res.active_role || roleId);
       return res;
@@ -1611,7 +1611,7 @@ export default function App() {
   async function loadMyOrders() {
     if (!me) return;
     try {
-      const res = await api(`/orders/driver/${me.id}`);
+      const res = await api(`/orders/executor/${me.id}`);
       setMyOrders(Array.isArray(res) ? res : [res]);
     } catch (e) {
       setError(e.message);
@@ -2187,7 +2187,7 @@ export default function App() {
               {myOrders.length === 0 && <div style={s.empty}>Пока нет принятых заказов</div>}
 
               {activeOrder && (
-                <DriverChat
+                <ExecutorChat
                   orderId={activeOrder.id}
                   executorId={me.id}
                   t={t}
@@ -2198,7 +2198,7 @@ export default function App() {
           )}
 
           {page === "support" && me && (
-            <DriverSupportPage me={me} t={t} m={m} onBack={backPage} />
+            <ExecutorSupportPage me={me} t={t} m={m} onBack={backPage} />
           )}
 
           {page === "profile" && me && (
@@ -2239,8 +2239,8 @@ export default function App() {
               onLogout={() => {
                 setRole("");
                 localStorage.removeItem("pro_role");
-                sessionStorage.removeItem("driver_contact_ok");
-                setDriverToken(null);
+                sessionStorage.removeItem("executor_contact_ok");
+                setExecutorToken(null);
                 setMe(null);
                 resetPage("role");
               }}

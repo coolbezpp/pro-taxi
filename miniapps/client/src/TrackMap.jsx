@@ -13,7 +13,7 @@ setWorkerUrl(workerUrl);
 installPmtilesProtocol();
 
 // Карта слежения: точки А/Б и движение исполнителя (только просмотр).
-export default function TrackMap({ from, to, driver, t, height = 240 }) {
+export default function TrackMap({ from, to, executor, t, height = 240 }) {
   const container = useRef(null);
   const mapRef = useRef(null);
   const markers = useRef({});
@@ -112,16 +112,16 @@ export default function TrackMap({ from, to, driver, t, height = 240 }) {
   // Маркер исполнителя
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !ready || !driver) return;
-    if (driver.lat == null || driver.lon == null) {
+    if (!map || !ready || !executor) return;
+    if (executor.lat == null || executor.lon == null) {
       // Позиция скрыта (приватность/офлайн) — убираем маркер, если был
-      if (markers.current.driver) {
-        markers.current.driver.remove();
-        delete markers.current.driver;
+      if (markers.current.executor) {
+        markers.current.executor.remove();
+        delete markers.current.executor;
       }
       return;
     }
-    if (!markers.current.driver) {
+    if (!markers.current.executor) {
       const el = document.createElement("div");
       Object.assign(el.style, {
         width: "18px",
@@ -131,13 +131,13 @@ export default function TrackMap({ from, to, driver, t, height = 240 }) {
         border: "3px solid #fff",
         boxShadow: "0 0 0 6px rgba(249,115,22,.25), 0 4px 12px rgba(0,0,0,.3)",
       });
-      markers.current.driver = new Marker({ element: el })
-        .setLngLat([driver.lon, driver.lat])
+      markers.current.executor = new Marker({ element: el })
+        .setLngLat([executor.lon, executor.lat])
         .addTo(map);
     } else {
-      markers.current.driver.setLngLat([driver.lon, driver.lat]);
+      markers.current.executor.setLngLat([executor.lon, executor.lat]);
     }
-  }, [driver, ready, t.amber]);
+  }, [executor, ready, t.amber]);
 
   return (
     <div style={{

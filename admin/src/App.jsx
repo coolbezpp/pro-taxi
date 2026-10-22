@@ -1032,8 +1032,8 @@ export default function App() {
                         {created.toLocaleDateString("ru-RU")} {created.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
                       </span>
                     )}
-                    <span>Клиент: {o.passenger_id || "—"}</span>
-                    <span>Исполнитель: {o.driver_id || "—"}</span>
+                    <span>Клиент: {o.client_id || "—"}</span>
+                    <span>Исполнитель: {o.executor_id || "—"}</span>
                   </div>
 
                   <button
@@ -1056,8 +1056,8 @@ export default function App() {
                         ["pin", "Адрес подачи", o.from_address || "—"],
                         ["pin", "Адрес назначения", o.to_address || "—"],
                         ["money", "Стоимость", `${o.total_price ?? "—"} ₽`],
-                        ["person", "Клиент", o.passenger_id ? `ID ${o.passenger_id}` : "—"],
-                        ["car", "Исполнитель", o.driver_id ? `ID ${o.driver_id}` : "Не назначен"],
+                        ["person", "Клиент", o.client_id ? `ID ${o.client_id}` : "—"],
+                        ["car", "Исполнитель", o.executor_id ? `ID ${o.executor_id}` : "Не назначен"],
                         ["clock", "Создан", created ? created.toLocaleString("ru-RU") : "—"],
                       ].map(([icon, label, value]) => (
                         <div key={label} style={{

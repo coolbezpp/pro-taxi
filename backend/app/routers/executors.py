@@ -187,7 +187,7 @@ def has_active_order(db, executor_id):
         db.query(Order)
         .filter(
             Order.status.in_(ACTIVE_STATUSES),
-            Order.driver_id == executor_id,
+            Order.executor_id == executor_id,
         )
         .first()
     )
@@ -496,7 +496,7 @@ def admin_executor_profile(
     ).order_by(ExecutorPhotoCheck.id.desc()).limit(50).all()
 
     orders = db.query(Order).filter(
-        Order.driver_id == executor_id
+        Order.executor_id == executor_id
     ).order_by(Order.id.desc()).limit(20).all()
 
     return {
@@ -561,7 +561,7 @@ def balance_history(
 
     # Заработок — по завершённым заказам (выплата = сумма − комиссия)
     orders = db.query(Order).filter(
-        Order.driver_id == executor_id,
+        Order.executor_id == executor_id,
         Order.status == "completed",
     ).all()
 
@@ -1117,7 +1117,7 @@ def earnings(
     since = datetime.utcnow() - timedelta(days=days)
 
     orders = db.query(Order).filter(
-        Order.driver_id == executor_id,
+        Order.executor_id == executor_id,
         Order.status == "completed",
         Order.created_at >= since,
     ).all()

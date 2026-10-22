@@ -44,11 +44,11 @@ def create_extra(order_id: int, data: ExtraIn, db: Session = Depends(get_db)):
         event=f"extra_offered:{data.title}:{data.price}"
     ))
 
-    if order.passenger_id:
-        passenger = db.query(Client).get(order.passenger_id)
-        if passenger:
+    if order.client_id:
+        client = db.query(Client).get(order.client_id)
+        if client:
             db.add(Notification(
-                user_max_id=passenger.max_id,
+                user_max_id=client.max_id,
                 title="Новая допуслуга",
                 body=f"Исполнитель предложил: {data.title} — {data.price} ₽",
                 order_id=order_id,
@@ -91,8 +91,8 @@ def decide_extra(extra_id: int, data: DecisionIn, db: Session = Depends(get_db))
                 2,
             )
 
-            if order.passenger_id:
-                client = db.query(Client).get(order.passenger_id)
+            if order.client_id:
+                client = db.query(Client).get(order.client_id)
                 if client:
                     db.add(Notification(
                         user_max_id=client.max_id,

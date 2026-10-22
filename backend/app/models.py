@@ -15,42 +15,6 @@ class User(Base):
     risk_score=Column(Float,default=0)
     created_at=Column(DateTime,server_default=func.now())
 
-class DriverProfile(Base):
-    __tablename__="driver_profiles"
-    id=Column(Integer,primary_key=True)
-    user_id=Column(Integer,ForeignKey("users.id"),unique=True)
-    full_name=Column(String)
-    license_number=Column(String)
-    experience_years=Column(Integer)
-    medical_until=Column(DateTime)
-    online=Column(Boolean,default=False)
-    child_seats=Column(Integer,default=0)
-    animals_allowed=Column(Boolean,default=False)
-    intercity_enabled=Column(Boolean,default=False)
-    child_tariff_enabled=Column(Boolean,default=False)
-    rating_likes=Column(Integer,default=0)
-    rating_dislikes=Column(Integer,default=0)
-    balance=Column(Float,default=0)
-
-class Vehicle(Base):
-    __tablename__="vehicles"
-    id=Column(Integer,primary_key=True)
-    driver_id=Column(Integer,ForeignKey("driver_profiles.id"))
-    brand=Column(String); model=Column(String); color=Column(String); plate=Column(String)
-    inspection_until=Column(DateTime); insurance_until=Column(DateTime)
-    taxi_permit=Column(Boolean,default=False)
-    approved=Column(Boolean,default=False)
-
-class DriverDocument(Base):
-    __tablename__="driver_documents"
-    id=Column(Integer,primary_key=True)
-    driver_id=Column(Integer,ForeignKey("driver_profiles.id"))
-    type=Column(String)  # license, medical, inspection, insurance, permit, photo, child_seat
-    file_url=Column(String)
-    status=Column(String,default="pending")
-    expires_at=Column(DateTime)
-    reviewed_by=Column(Integer)
-
 class Tariff(Base):
     __tablename__="tariffs"
     id=Column(Integer,primary_key=True)
@@ -77,8 +41,8 @@ class Settlement(Base):
 class Order(Base):
     __tablename__="orders"
     id=Column(Integer,primary_key=True)
-    passenger_id=Column(Integer,index=True)
-    driver_id=Column(Integer,index=True,nullable=True)
+    client_id=Column(Integer,index=True)
+    executor_id=Column(Integer,index=True,nullable=True)
     service=Column(String,default="taxi")
     tariff_code=Column(String,default="standard")
     status=Column(String,default="created")
@@ -116,16 +80,6 @@ class OrderEvent(Base):
     event=Column(String); payload=Column(JSON,default=dict)
     created_at=Column(DateTime,server_default=func.now())
 
-class BalanceTransaction(Base):
-    __tablename__="balance_transactions"
-    id=Column(Integer,primary_key=True)
-    driver_id=Column(Integer,ForeignKey("driver_profiles.id"))
-    type=Column(String)  # topup_request, topup, commission, correction
-    amount=Column(Float)
-    status=Column(String,default="pending")
-    order_id=Column(Integer,nullable=True)
-    created_at=Column(DateTime,server_default=func.now())
-
 class Rating(Base):
     __tablename__="ratings"
     id=Column(Integer,primary_key=True)
@@ -133,15 +87,6 @@ class Rating(Base):
     author_id=Column(Integer); target_id=Column(Integer)
     value=Column(String)  # like, dislike
     comment=Column(Text,nullable=True)
-
-class PhotoCheck(Base):
-    __tablename__="photo_checks"
-    id=Column(Integer,primary_key=True)
-    driver_id=Column(Integer,ForeignKey("driver_profiles.id"))
-    photo_url=Column(String)
-    status=Column(String,default="pending")
-    decision_by=Column(Integer)
-    created_at=Column(DateTime,server_default=func.now())
 
 
 class ExecutorBalanceOp(Base):

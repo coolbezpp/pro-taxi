@@ -30,15 +30,15 @@ services:
     restart: unless-stopped
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     logging: *default_logging
-  passenger:
-    build: ./miniapps/passenger
+  client:
+    build: ./miniapps/client
     # 3001 на хосте занят процессом pm2 (max-bots) — Caddy ходит по сети
     # по имени контейнера, поэтому наружный порт тут не критичен.
     ports: ["127.0.0.1:3011:80"]
     restart: unless-stopped
     logging: *default_logging
-  driver:
-    build: ./miniapps/driver
+  executor:
+    build: ./miniapps/executor
     ports: ["127.0.0.1:3002:80"]
     restart: unless-stopped
     logging: *default_logging
@@ -55,8 +55,8 @@ services:
       - caddy_data:/data
     depends_on:
       api: {condition: service_started}
-      passenger: {condition: service_started}
-      driver: {condition: service_started}
+      client: {condition: service_started}
+      executor: {condition: service_started}
       admin: {condition: service_started}
     restart: unless-stopped
     logging: *default_logging

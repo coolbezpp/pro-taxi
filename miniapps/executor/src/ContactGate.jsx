@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useTheme } from "./theme.js";
-import { setDriverToken } from "./api.js";
+import { setExecutorToken } from "./api.js";
 
 function getWebApp() {
   return (
@@ -24,7 +24,7 @@ function getInitData() {
 
 export default function ContactGate({ children }) {
   const [state, setState] = useState(
-    sessionStorage.getItem("driver_contact_ok") === "1" ? "ready" : "ask"
+    sessionStorage.getItem("executor_contact_ok") === "1" ? "ready" : "ask"
   );
   const [error, setError] = useState("");
   const { t } = useTheme();
@@ -72,8 +72,8 @@ export default function ContactGate({ children }) {
       }
 
       const payload = await res.json().catch(() => ({}));
-      if (payload?.token) setDriverToken(payload.token);
-      sessionStorage.setItem("driver_contact_ok", "1");
+      if (payload?.token) setExecutorToken(payload.token);
+      sessionStorage.setItem("executor_contact_ok", "1");
       setState("ready");
     } catch (e) {
       setError(e.message || "Не удалось подтвердить номер");

@@ -74,7 +74,7 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
   }
 
   const status = order?.status || "created";
-  const driver = track?.driver;
+  const executor = track?.executor;
   // Координаты могут отсутствовать (например, грузовой заказ без карты) —
   // тогда не отдаём в карту точку вовсе, чтобы не рисовать маркеры с null
   const from = track && track.from_lat != null ? { lat: track.from_lat, lon: track.from_lon } : null;
@@ -124,7 +124,7 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
           </p>
         )}
 
-        {driver && (
+        {executor && (
           <div style={{
             display: "flex", alignItems: "center", gap: 10,
             marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.border}`,
@@ -132,14 +132,14 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
             <span style={{
               width: 38, height: 38, borderRadius: "50%", background: t.accentSoft, color: t.accent,
               display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900,
-            }}>{String(driver.name || "И").slice(0, 1).toUpperCase()}</span>
+            }}>{String(executor.name || "И").slice(0, 1).toUpperCase()}</span>
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: "block", fontSize: 14, fontWeight: 700, color: t.text }}>
-                {driver.name}
+                {executor.name}
               </span>
               <span style={{ display: "block", fontSize: 12, color: t.sub, marginTop: 2 }}>
-                Рейтинг {driver.rating_likes} / {driver.rating_dislikes}
-                {driver.lat != null ? " · на связи" : ""}
+                Рейтинг {executor.rating_likes} / {executor.rating_dislikes}
+                {executor.lat != null ? " · на связи" : ""}
               </span>
             </span>
           </div>
@@ -158,14 +158,14 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
       </div>
 
       {/* Слежение за исполнителем */}
-      {driver && (
+      {executor && (
         <div style={{ marginTop: 12 }}>
-          <TrackMap from={from} to={to} driver={driver} t={t} height={230} />
+          <TrackMap from={from} to={to} executor={executor} t={t} height={230} />
         </div>
       )}
 
       {/* Чат с исполнителем */}
-      {driver && (
+      {executor && (
         <div style={{ marginTop: 16 }}>
           <strong style={{ display: "block", fontSize: 13.5, color: t.sub, marginBottom: 8 }}>
             Чат с исполнителем

@@ -57,12 +57,12 @@ def _require_participant(db: Session, order, payload: dict) -> str:
             executor_id = int(payload.get("sub"))
         except (TypeError, ValueError):
             raise HTTPException(status_code=401, detail="Некорректный токен")
-        if order.driver_id and int(order.driver_id) == executor_id:
+        if order.executor_id and int(order.executor_id) == executor_id:
             return "executor"
         raise HTTPException(status_code=403, detail="Это не ваш заказ")
 
     client = _client_of_token(db, payload)
-    if client and order.passenger_id == client.id:
+    if client and order.client_id == client.id:
         return "client"
 
     raise HTTPException(status_code=403, detail="Это не ваш заказ")
@@ -172,11 +172,11 @@ def track_order(
     payload = _decode(credentials)
     role = _require_participant(db, order, payload)
 
-    driver = None
-    if order.driver_id:
-        executor = db.query(Executor).filter(Executor.id == order.driver_id).first()
+    executor_info = None
+    if order.executor_id:
+        executor = db.query(Executor).filter(Executor.id == order.executor_id).first()
         if executor:
-            driver = {
+            executor_info = {
                 "id": executor.id,
                 "name": executor.name or "Исполнитель",
                 "rating_likes": int(executor.rating_likes or 0),
@@ -188,13 +188,13 @@ def track_order(
             # Приватность: клиент видит позицию только по правилам сервиса
             # (мастер — никогда; cargo/межгород — за 10 минут до начала).
             if role == "client" and not _location_visible_to_client(db, order):
-                driver["lat"] = None
-                driver["lon"] = None
-                driver["updated_at"] = None
+                executor_info["lat"] = None
+                executor_info["lon"] = None
+                executor_info["updated_at"] = None
 
     client_name = None
-    if order.passenger_id:
-        client = db.query(Client).filter(Client.id == order.passenger_id).first()
+    if order.client_id:
+        client = db.query(Client).filter(Client.id == order.client_id).first()
         client_name = client.name if client else None
 
     return {
@@ -209,7 +209,7 @@ def track_order(
         "total_price": order.total_price,
         "comment": (order.meta or {}).get("comment") if order.meta else None,
         "client_name": client_name,
-        "driver": driver,
+        "executor": executor_info,
     }
 
 
@@ -265,7 +265,7 @@ def send_message(
         raise HTTPException(400, "Пустое сообщение")
     text = text[:1000]
 
-    author_id = order.passenger_id
+    author_id = order.client_id
     if author_role == "executor":
         author_id = int(payload.get("sub"))
 

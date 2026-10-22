@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 
 const ROLES = {
-  driver: "Водитель такси",
+  driver: "Исполнитель (такси)",
   courier: "Курьер",
   cargo: "Грузоперевозчик",
   master: "Мастер",

@@ -9,14 +9,27 @@ procityservice.ru {
         reverse_proxy api:8000
     }
 
+    # Миниапп клиента (новый путь)
+    handle /client* {
+        uri strip_prefix /client
+        reverse_proxy client:80
+    }
+
+    # Миниапп исполнителя (новый путь)
+    handle /executor* {
+        uri strip_prefix /executor
+        reverse_proxy executor:80
+    }
+
+    # Легаси-алиасы старых путей (старые вебаппы в MAX, закэшированные ссылки)
     handle /passenger* {
         uri strip_prefix /passenger
-        reverse_proxy passenger:80
+        reverse_proxy client:80
     }
 
     handle /driver* {
         uri strip_prefix /driver
-        reverse_proxy driver:80
+        reverse_proxy executor:80
     }
 
     handle /admin* {

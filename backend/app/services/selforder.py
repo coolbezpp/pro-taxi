@@ -19,9 +19,9 @@ def self_order_blocked(db: Session, order: models.Order, executor: models.Execut
     Номера из SELF_ORDER_EXEMPT (.env, через запятую) — исключение:
     владелец сервиса может тестировать свои же заказы.
     """
-    if not order.passenger_id or not executor:
+    if not order.client_id or not executor:
         return None
-    client = db.query(models.Client).get(order.passenger_id)
+    client = db.query(models.Client).get(order.client_id)
     cp = normalize_phone(client.phone if client else None)
     ep = normalize_phone(executor.phone)
     if not cp or not ep or cp != ep:

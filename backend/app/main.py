@@ -328,7 +328,7 @@ CARGO_LOADER_HOURS_MAX = 12
 
 
 class OrderIn(BaseModel):
-    passenger_id:int; tariff_code:str="standard"; service:str="taxi"; from_address:str; to_address:str
+    client_id:int; tariff_code:str="standard"; service:str="taxi"; from_address:str; to_address:str
     from_lat:float|None=None; from_lon:float|None=None; to_lat:float|None=None; to_lon:float|None=None
     distance_km:float; city_km:float=0; out_km:float=0
     children:int=0; animals:bool=False; child_seats:int=0
@@ -337,8 +337,8 @@ class OrderIn(BaseModel):
     own_child_seat: bool = False
     comment: str | None = None
     meta: dict | None = None
-def _passenger_client(db: Session, user: dict):
-    """Реальный клиент из токена (не наказываем чужим passenger_id из тела запроса)."""
+def _client_from_token(db: Session, user: dict):
+    """Реальный клиент из токена (не наказываем чужим client_id из тела запроса)."""
     max_id = _token_max_id(db, user) if user else None
     if not max_id:
         return None
@@ -355,7 +355,7 @@ def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_cu
     service = (data.service or "taxi").strip().lower()
     if service not in ("taxi", "cargo"):
         raise HTTPException(400, "Сервис недоступен")
-    client = _passenger_client(db, user)
+    client = _client_from_token(db, user)
     cp=float(db.query(models.Setting).get("commission_percent").value) if db.query(models.Setting).get("commission_percent") else 15
 
     if service == "cargo":
@@ -388,7 +388,7 @@ def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_cu
         if (data.comment or "").strip():
             meta["comment"]=data.comment.strip()[:500]
 
-    o=models.Order(passenger_id=client.id if client else data.passenger_id,service=service,tariff_code=tariff_code,from_address=data.from_address,to_address=data.to_address,
+    o=models.Order(client_id=client.id if client else data.client_id,service=service,tariff_code=tariff_code,from_address=data.from_address,to_address=data.to_address,
         from_lat=data.from_lat,from_lon=data.from_lon,to_lat=data.to_lat,to_lon=data.to_lon,distance_km=data.distance_km,
         city_distance_km=data.city_km,out_city_distance_km=data.out_km,base_price=base,options_price=0,
         manual_increase=manual_increase if service != "cargo" else 0,total_price=total,commission_percent=cp,
@@ -410,7 +410,7 @@ def my_orders(user=Depends(get_current_user), db: Session=Depends(get_db)):
         return {"orders": [], "active_order_id": None}
 
     rows = db.query(models.Order).filter(
-        models.Order.passenger_id == client.id
+        models.Order.client_id == client.id
     ).order_by(models.Order.id.desc()).limit(100).all()
 
     active = next(
@@ -475,7 +475,7 @@ def _client_order(db: Session, order_id: int, user: dict):
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
         raise HTTPException(404, "Заказ не найден")
-    if order.passenger_id != client.id:
+    if order.client_id != client.id:
         raise HTTPException(403, "Это не ваш заказ")
     return order
 
@@ -586,8 +586,8 @@ def available_orders(executor_id: int, role: str, db: Session = Depends(get_db))
         })
     return result
 
-@app.post("/api/orders/{order_id}/assign/{driver_id}")
-def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
+@app.post("/api/orders/{order_id}/assign/{executor_id}")
+def assign(order_id:int, executor_id:int, db: Session=Depends(get_db)):
     o = db.query(models.Order).get(order_id)
     if not o:
         raise HTTPException(404, "Заказ не найден")
@@ -595,7 +595,7 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
     if o.status not in ("created", "chain_reserved"):
         raise HTTPException(409, "Заказ недоступен для принятия")
 
-    executor = db.query(models.Executor).get(driver_id)
+    executor = db.query(models.Executor).get(executor_id)
     if not executor:
         raise HTTPException(404, "Исполнитель не найден")
 
@@ -608,16 +608,16 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
         raise HTTPException(403, so)
 
     # Контроль рабочего времени: нельзя принять заказ при лимите 12 ч или во время отдыха
-    work = worktime.work_state(db, driver_id)
+    work = worktime.work_state(db, executor_id)
     if work.get("status") == worktime.STATUS_BLOCKED:
         raise HTTPException(409, "Исчерпан лимит рабочего времени — новые заказы не поступают")
     if work.get("status") == worktime.STATUS_RESTING:
         raise HTTPException(409, "После смены нужен отдых 6 часов — вернёмся к заказам позже")
-    worktime.start_session(db, driver_id)
+    worktime.start_session(db, executor_id)
     # Успешный приём сбрасывает счётчик пропусков
     executor.skip_streak = 0
 
-    roles = [r.role for r in db.query(models.ExecutorRole).filter_by(executor_id=driver_id).all()]
+    roles = [r.role for r in db.query(models.ExecutorRole).filter_by(executor_id=executor_id).all()]
     # Роль выводится из сервиса заказа: грузовой заказ не должен требовать роль таксиста
     required_role = SERVICE_ROLE.get(o.service or "taxi", "driver")
 
@@ -625,7 +625,7 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
         raise HTTPException(403, "У исполнителя нет роли для этого заказа")
 
     active = db.query(models.Order).filter(
-        models.Order.driver_id == driver_id,
+        models.Order.executor_id == executor_id,
         models.Order.status.in_(["assigned", "accepted", "in_progress"])
     ).first()
 
@@ -647,7 +647,7 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
         if current_intercity and not reverse:
             raise HTTPException(400, "Для межгорода доступен только встречный заказ")
 
-    o.driver_id = driver_id
+    o.executor_id = executor_id
     o.executor_role = required_role
     o.status = "assigned"
     o.planned_completion_at = estimate_completion(o)
@@ -662,8 +662,8 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
         category="order"
     ))
 
-    if o.passenger_id:
-        client = db.query(models.Client).get(o.passenger_id)
+    if o.client_id:
+        client = db.query(models.Client).get(o.client_id)
         if client:
             db.add(models.Notification(
                 user_max_id=client.max_id,
@@ -681,8 +681,8 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
         bot="executor"
     )
 
-    if o.passenger_id:
-        client = db.query(models.Client).get(o.passenger_id)
+    if o.client_id:
+        client = db.query(models.Client).get(o.client_id)
         if client:
             send_max_message(
                 client.max_id,
@@ -692,15 +692,15 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
 
     return o
 
-@app.post("/api/orders/{order_id}/activate-chain/{driver_id}")
-def activate_chain(order_id:int, driver_id:int, db: Session=Depends(get_db)):
+@app.post("/api/orders/{order_id}/activate-chain/{executor_id}")
+def activate_chain(order_id:int, executor_id:int, db: Session=Depends(get_db)):
     completed = db.query(models.Order).get(order_id)
-    if not completed or completed.driver_id != driver_id:
+    if not completed or completed.executor_id != executor_id:
         raise HTTPException(404, "Завершённый заказ не найден")
 
     reserved = db.query(models.Order).filter(
         models.Order.chain_reserved_order_id == order_id,
-        models.Order.driver_id == driver_id,
+        models.Order.executor_id == executor_id,
         models.Order.status == "chain_reserved"
     ).first()
 
@@ -716,13 +716,13 @@ def activate_chain(order_id:int, driver_id:int, db: Session=Depends(get_db)):
 @app.post("/api/orders/{order_id}/complete")
 def complete(order_id:int, db: Session=Depends(get_db)):
     o=db.query(models.Order).get(order_id)
-    if not o or not o.driver_id: raise HTTPException(400)
+    if not o or not o.executor_id: raise HTTPException(400)
     if o.status == "completed":
         raise HTTPException(409, "Заказ уже завершён")
     if o.status not in ("assigned","accepted","in_progress"):
         raise HTTPException(400, "Заказ ещё не выполняется")
     o.status="completed"
-    executor=db.query(models.Executor).get(o.driver_id)
+    executor=db.query(models.Executor).get(o.executor_id)
     payout=round((o.total_price or 0)-(o.commission_amount or 0),2)
     if executor:
         executor.balance=(executor.balance or 0)+payout
@@ -736,8 +736,8 @@ def complete(order_id:int, db: Session=Depends(get_db)):
         worktime.touch_session(db, executor.id)
     db.add(models.OrderEvent(order_id=o.id,event="completed",payload={"payout":payout,"commission":o.commission_amount})); db.commit(); db.refresh(o)
 
-    if o.passenger_id:
-        client=db.query(models.Client).get(o.passenger_id)
+    if o.client_id:
+        client=db.query(models.Client).get(o.client_id)
         if client:
             send_max_message(
                 client.max_id,
@@ -799,22 +799,22 @@ def rate(
     if user:
         max_id = _token_max_id(db, user)
         client = db.query(models.Client).filter_by(max_id=max_id).first()
-        if not client or o.passenger_id != client.id:
+        if not client or o.client_id != client.id:
             raise HTTPException(403, "Этот заказ вам не принадлежит")
         author_id = client.id
         kind = "client"
-        if o.driver_id:
-            target_executor = db.query(models.Executor).get(o.driver_id)
+        if o.executor_id:
+            target_executor = db.query(models.Executor).get(o.executor_id)
             target_id = target_executor.id if target_executor else None
     else:
         if not data.executor_id:
             raise HTTPException(401, "Требуется авторизация")
         ex = db.query(models.Executor).get(data.executor_id)
-        if not ex or o.driver_id != ex.id:
+        if not ex or o.executor_id != ex.id:
             raise HTTPException(403, "Заказ принадлежит другому исполнителю")
         author_id = ex.id
         kind = "executor"
-        target_id = o.passenger_id
+        target_id = o.client_id
 
     if target_id is None:
         raise HTTPException(409, "В этом заказе некого оценивать")
@@ -922,7 +922,7 @@ app.include_router(masters_router, prefix="/api")
 
 class MasterOrderIn(BaseModel):
     service_id: int
-    passenger_id: int | None = None
+    client_id: int | None = None
     from_address: str
     to_address: str = ""
     scheduled_at: str | None = None
@@ -945,10 +945,10 @@ def create_master_order(data: MasterOrderIn, db: Session = Depends(get_db), user
     commission_percent = 10
     commission_amount = round(price * commission_percent / 100, 2)
 
-    client = _passenger_client(db, user)
+    client = _client_from_token(db, user)
 
     order = models.Order(
-        passenger_id=client.id if client else data.passenger_id,
+        client_id=client.id if client else data.client_id,
         service="master",
         tariff_code="master",
         status="created",
@@ -1029,7 +1029,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
 
     if client:
         order = db.query(models.Order).filter(
-            models.Order.passenger_id == client.id,
+            models.Order.client_id == client.id,
             models.Order.status.in_(["created", "assigned", "accepted", "in_progress"]),
         ).order_by(models.Order.id.desc()).first()
 
@@ -1045,7 +1045,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
             }
 
         completed = db.query(models.Order).filter(
-            models.Order.passenger_id == client.id,
+            models.Order.client_id == client.id,
             models.Order.status == "completed",
         ).order_by(models.Order.id.desc()).first()
 
@@ -1063,7 +1063,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
 
     if executor:
         order = db.query(models.Order).filter(
-            models.Order.driver_id == executor.id,
+            models.Order.executor_id == executor.id,
             models.Order.status.in_(["accepted", "in_progress"]),
         ).order_by(models.Order.id.desc()).first()
 
@@ -1079,7 +1079,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
             }
 
         completed = db.query(models.Order).filter(
-            models.Order.driver_id == executor.id,
+            models.Order.executor_id == executor.id,
             models.Order.status == "completed",
         ).order_by(models.Order.id.desc()).first()
 
@@ -1121,7 +1121,7 @@ def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = De
         models.Client.max_id == max_id
     ).first()
 
-    if not client or order.passenger_id != client.id:
+    if not client or order.client_id != client.id:
         raise HTTPException(403, "Можно отменять только свои заказы")
 
     if order.status not in ["created", "accepted"]:
@@ -1130,20 +1130,20 @@ def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = De
     order.status = "cancelled"
     db.commit()
 
-    if order.driver_id:
-        driver = db.query(models.Executor).filter(
-            models.Executor.id == order.driver_id
+    if order.executor_id:
+        executor = db.query(models.Executor).filter(
+            models.Executor.id == order.executor_id
         ).first()
 
-        if driver:
+        if executor:
             db.add(models.Notification(
-                user_max_id=str(driver.max_id),
+                user_max_id=str(executor.max_id),
                 title="Заказ отменён",
                 body=f"Клиент отменил заказ №{order.id}.",
                 category="order"
             ))
             send_max_message(
-                driver.max_id,
+                executor.max_id,
                 f"Клиент отменил заказ №{order.id}.",
                 bot="executor",
             )
@@ -1174,7 +1174,7 @@ def executor_order_action(
     act = action.get("action")
 
     if act == "accept":
-        if order.status != "created" or order.driver_id:
+        if order.status != "created" or order.executor_id:
             raise HTTPException(400, "Заказ уже занят или недоступен")
 
         # Анти-самозаказы: свой же номер у клиента и исполнителя — нельзя
@@ -1192,44 +1192,44 @@ def executor_order_action(
         # Успешный приём сбрасывает счётчик пропусков
         executor.skip_streak = 0
 
-        order.driver_id = executor.id
+        order.executor_id = executor.id
         order.status = "accepted"
 
-        if order.passenger_id:
-            passenger = db.query(models.Client).filter(
-                models.Client.id == order.passenger_id
+        if order.client_id:
+            client = db.query(models.Client).filter(
+                models.Client.id == order.client_id
             ).first()
 
-            if passenger:
+            if client:
                 db.add(models.Notification(
-                    user_max_id=str(passenger.max_id),
+                    user_max_id=str(client.max_id),
                     title="Заказ принят",
                     body=f"Исполнитель принял ваш заказ №{order.id}.",
                     category="order"
                 ))
 
     elif act == "start":
-        if order.driver_id != executor.id or order.status != "accepted":
+        if order.executor_id != executor.id or order.status != "accepted":
             raise HTTPException(400, "Нельзя начать этот заказ")
 
         order.status = "in_progress"
         worktime.touch_session(db, executor.id)
 
-        if order.passenger_id:
-            passenger = db.query(models.Client).filter(
-                models.Client.id == order.passenger_id
+        if order.client_id:
+            client = db.query(models.Client).filter(
+                models.Client.id == order.client_id
             ).first()
 
-            if passenger:
+            if client:
                 db.add(models.Notification(
-                    user_max_id=str(passenger.max_id),
+                    user_max_id=str(client.max_id),
                     title="Заказ выполняется",
                     body=f"Исполнитель начал заказ №{order.id}.",
                     category="order"
                 ))
 
     elif act == "complete":
-        if order.driver_id != executor.id or order.status != "in_progress":
+        if order.executor_id != executor.id or order.status != "in_progress":
             raise HTTPException(400, "Нельзя завершить этот заказ")
 
         order.status = "completed"
@@ -1256,20 +1256,20 @@ def executor_order_action(
         ))
         worktime.touch_session(db, executor.id)
 
-        if order.passenger_id:
-            passenger = db.query(models.Client).filter(
-                models.Client.id == order.passenger_id
+        if order.client_id:
+            client = db.query(models.Client).filter(
+                models.Client.id == order.client_id
             ).first()
 
-            if passenger:
+            if client:
                 db.add(models.Notification(
-                    user_max_id=str(passenger.max_id),
+                    user_max_id=str(client.max_id),
                     title="Заказ завершён",
                     body=f"Заказ №{order.id} завершён. Спасибо, что выбрали «Про».",
                     category="order"
                 ))
                 send_max_message(
-                    passenger.max_id,
+                    client.max_id,
                     f"Заказ №{order.id} завершён. Спасибо, что выбрали «Про»!",
                     bot="client",
                 )
@@ -1296,7 +1296,7 @@ def executor_available_orders(
 
     query = db.query(models.Order).filter(
         models.Order.status == "created",
-        models.Order.driver_id.is_(None),
+        models.Order.executor_id.is_(None),
     )
 
     if service:
@@ -1341,8 +1341,8 @@ def admin_orders(
         "from_address": o.from_address,
         "to_address": o.to_address,
         "total_price": o.total_price,
-        "passenger_id": o.passenger_id,
-        "driver_id": o.driver_id,
+        "client_id": o.client_id,
+        "executor_id": o.executor_id,
         "created_at": o.created_at.isoformat() if o.created_at else None,
     } for o in orders]}
 
@@ -1355,7 +1355,7 @@ def admin_client_profile(client_id: int, admin=Depends(get_admin), db: Session=D
         raise HTTPException(404, "Клиент не найден")
 
     orders = db.query(models.Order).filter(
-        models.Order.passenger_id == client_id
+        models.Order.client_id == client_id
     ).order_by(models.Order.id.desc()).limit(50).all()
 
     active = next(
@@ -1653,8 +1653,8 @@ def export_orders_csv(admin=Depends(get_admin), db: Session = Depends(get_db)):
             o.to_address,
             o.distance_km,
             o.total_price,
-            o.passenger_id,
-            o.driver_id,
+            o.client_id,
+            o.executor_id,
             o.created_at,
         ])
 
@@ -2129,15 +2129,15 @@ def pro_map_proxy(resource: str, admin=Depends(get_admin)):
         )
 
 
-# PRO_PASSENGER_MAP_PATCH
-def _passenger_map_rewrite(value):
+# PRO_MAP_PATCH
+def _map_rewrite(value):
     if isinstance(value, dict):
         return {
-            key: _passenger_map_rewrite(item)
+            key: _map_rewrite(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [_passenger_map_rewrite(item) for item in value]
+        return [_map_rewrite(item) for item in value]
     if isinstance(value, str):
         return value.replace(
             "/api/admin/map-proxy/",
@@ -2147,7 +2147,7 @@ def _passenger_map_rewrite(value):
 
 
 @app.get("/api/geo/map-proxy/{resource:path}", include_in_schema=False)
-def passenger_map_proxy(
+def map_proxy(
     resource: str,
     user=Depends(get_current_user),
 ):
@@ -2163,7 +2163,7 @@ def passenger_map_proxy(
     if "json" in content_type.lower():
         data = _map_json.loads(response.body)
         response.body = _map_json.dumps(
-            _passenger_map_rewrite(data),
+            _map_rewrite(data),
             ensure_ascii=False,
         ).encode("utf-8")
         response.headers["content-length"] = str(len(response.body))

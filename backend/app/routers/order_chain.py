@@ -12,16 +12,16 @@ router = APIRouter(tags=["order-chain"])
 ACTIVE = ["assigned", "accepted", "in_progress"]
 
 
-def notify_passenger(db, order, text):
+def notify_client(db, order, text):
     """Пуш клиенту по поездке (не ломает обработку, если бот не настроен)."""
-    if order.passenger_id:
-        passenger = db.query(Client).filter(Client.id == order.passenger_id).first()
-        if passenger:
-            send_max_message(passenger.max_id, text, bot="client")
+    if order.client_id:
+        client = db.query(Client).filter(Client.id == order.client_id).first()
+        if client:
+            send_max_message(client.max_id, text, bot="client")
 
 def get_active_order(db: Session, executor_id: int):
     q = db.query(Order).filter(Order.status.in_(ACTIVE))
-    for field in ["executor_id", "driver_id", "courier_id", "worker_id"]:
+    for field in ["executor_id", "courier_id", "worker_id"]:
         if hasattr(Order, field):
             return q.filter(getattr(Order, field) == executor_id).first()
     return None
@@ -113,7 +113,7 @@ def accept_order(order_id: int, executor_id: int, db: Session = Depends(get_db))
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(404, "Заказ не найден")
-    if order.driver_id != executor_id:
+    if order.executor_id != executor_id:
         raise HTTPException(403, "Заказ назначен другому исполнителю")
     if order.status != "assigned":
         raise HTTPException(409, "Заказ нельзя принять в текущем статусе")
@@ -122,7 +122,7 @@ def accept_order(order_id: int, executor_id: int, db: Session = Depends(get_db))
     db.add(OrderEvent(order_id=order.id, event="accepted", payload={"executor_id": executor_id}))
     db.commit()
     db.refresh(order)
-    notify_passenger(db, order, f"Ваш заказ №{order.id} принят. Исполнитель направляется к вам.")
+    notify_client(db, order, f"Ваш заказ №{order.id} принят. Исполнитель направляется к вам.")
     return order
 
 
@@ -131,7 +131,7 @@ def start_order(order_id: int, executor_id: int, db: Session = Depends(get_db)):
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(404, "Заказ не найден")
-    if order.driver_id != executor_id:
+    if order.executor_id != executor_id:
         raise HTTPException(403, "Заказ назначен другому исполнителю")
     if order.status != "accepted":
         raise HTTPException(409, "Сначала примите заказ")
@@ -140,13 +140,14 @@ def start_order(order_id: int, executor_id: int, db: Session = Depends(get_db)):
     db.add(OrderEvent(order_id=order.id, event="started", payload={"executor_id": executor_id}))
     db.commit()
     db.refresh(order)
-    notify_passenger(db, order, f"Началась поездка по заказу №{order.id}.")
+    notify_client(db, order, f"Началась поездка по заказу №{order.id}.")
     return order
 
 
-@router.get("/orders/driver/{executor_id}")
-def driver_orders(executor_id: int, db: Session = Depends(get_db)):
-    query = db.query(Order).filter(Order.driver_id == executor_id)
+@router.get("/orders/executor/{executor_id}")
+@router.get("/orders/driver/{executor_id}")  # legacy-URL старого миниаппа
+def executor_orders(executor_id: int, db: Session = Depends(get_db)):
+    query = db.query(Order).filter(Order.executor_id == executor_id)
     orders = query.order_by(Order.id.desc()).limit(100).all()
 
     return [{
@@ -157,7 +158,7 @@ def driver_orders(executor_id: int, db: Session = Depends(get_db)):
         "from_address": o.from_address,
         "to_address": o.to_address,
         "total_price": o.total_price,
-        "passenger_id": o.passenger_id,
-        "driver_id": o.driver_id,
+        "client_id": o.client_id,
+        "executor_id": o.executor_id,
         "rated": db.query(Rating).filter_by(order_id=o.id, author_id=executor_id).first() is not None,
     } for o in orders]
