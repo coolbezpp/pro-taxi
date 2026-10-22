@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Про — Суперапп городских сервисов · Концепт-визуализация</title>
+<style>
+  :root {
+    --purple: #6545ed;
+    --purple-light: #a892ff;
+    --purple-soft: #eee9ff;
+    --bg: #0d0c13;
+    --bg-card: #17161f;
+    --ink: #f4f3fa;
+    --muted: #8f8c9e;
+    --green: #c9f24d;
+    --radius: 26px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.45;
+    overflow-x: hidden;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  /* пилюли-лейблы секций, как в Pilo-кейсе */
+  .pill {
+    display: inline-block;
+    border: 1px solid rgba(255,255,255,.28);
+    border-radius: 999px;
+    padding: 8px 18px;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.75);
+  }
+  .pill.dark { border-color: rgba(20,16,50,.3); color: #55526a; }
+
+  .note {
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    line-height: 1.7;
+    max-width: 340px;
+  }
+
+  /* HERO */
+  header.hero {
+    position: relative;
+    padding: 90px 0 70px;
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(101,69,237,.55), transparent 60%),
+      radial-gradient(700px 420px at -10% 30%, rgba(101,69,237,.25), transparent 60%),
+      var(--bg);
+    overflow: hidden;
+  }
+  .hero-tag { margin-bottom: 26px; }
+  h1 {
+    font-size: clamp(44px, 7vw, 88px);
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 1.02;
+  }
+  h1 .accent { color: var(--purple-light); }
+  .hero-sub {
+    margin-top: 22px;
+    max-width: 560px;
+    font-size: 18px;
+    color: #b9b6c9;
+  }
+  .hero-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 40px;
+  }
+  .stat {
+    background: var(--bg-card);
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 18px;
+    padding: 18px 24px;
+    min-width: 150px;
+  }
+  .stat b { display: block; font-size: 32px; font-weight: 900; color: var(--purple-light); }
+  .stat span { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+  section { padding: 70px 0; }
+  .sec-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 44px; flex-wrap: wrap; }
+  h2 { font-size: clamp(30px, 4vw, 48px); font-weight: 900; letter-spacing: -0.02em; max-width: 640px; }
+  h2 .g { color: var(--green); }
+
+  /* телефонные макеты */
+  .phones {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 34px;
+    max-width: 1020px;
+    margin: 0 auto;
+    align-items: start;
+  }
+  .phone-col { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .phone {
+    width: 100%;
+    max-width: 300px;
+    height: 620px;
+    background: #000;
+    border: 8px solid #23222c;
+    border-radius: 46px;
+    padding: 12px;
+    box-shadow: 0 40px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.06);
+    position: relative;
+    overflow: hidden;
+  }
+  .screen {
+    width: 100%; height: 100%;
+    background: #f5f4fa;
+    border-radius: 34px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    color: #232139;
+    position: relative;
+  }
+  .notch {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    width: 96px; height: 22px; background: #000; border-radius: 999px; z-index: 5;
+  }
+  .sbar { display: flex; justify-content: space-between; padding: 12px 18px 4px; font-size: 11px; font-weight: 700; color: #232139; }
+  .sbody { flex: 1; padding: 14px 16px 0; overflow: hidden; }
+
+  .hello { font-size: 22px; font-weight: 900; letter-spacing: -.02em; }
+  .hello-sub { font-size: 12px; color: #858197; margin-top: 2px; }
+
+  .map {
+    margin-top: 12px;
+    height: 150px;
+    border-radius: 18px;
+    background:
+      linear-gradient(rgba(101,69,237,.08), rgba(101,69,237,.08)),
+      repeating-linear-gradient(45deg, #e7e4f4 0 2px, transparent 2px 26px),
+      repeating-linear-gradient(-45deg, #e7e4f4 0 2px, transparent 2px 34px),
+      #eceaf7;
+    position: relative;
+    overflow: hidden;
+  }
+  .route { position: absolute; inset: 0; }
+  .route svg { width: 100%; height: 100%; }
+  .pin {
+    position: absolute; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--purple); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.3);
+  }
+
+  .field {
+    background: #fff; border: 1px solid #e8e4f1; border-radius: 13px;
+    padding: 11px 13px; font-size: 13px; margin-top: 10px; color: #55526a;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .field .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--purple); flex: 0 0 auto; }
+  .field .dot.hole { background: #fff; border: 2px solid #c3bcdf; }
+  .geo { font-size: 12px; color: var(--purple); font-weight: 700; margin-top: 10px; }
+
+  .btn-primary {
+    margin-top: 12px;
+    background: var(--purple); color: #fff; text-align: center;
+    padding: 14px; border-radius: 15px; font-weight: 800; font-size: 15px;
+    box-shadow: 0 10px 24px rgba(101,69,237,.35);
+  }
+  .btn-ghost {
+    margin-top: 8px; text-align: center; padding: 12px; border-radius: 15px;
+    background: var(--purple-soft); color: var(--purple); font-weight: 800; font-size: 14px;
+  }
+
+  .services { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; }
+  .svc {
+    background: #fff; border: 1px solid #eeecf6; border-radius: 15px;
+    padding: 11px 12px; font-size: 12px; font-weight: 750;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .svc i {
+    width: 26px; height: 26px; border-radius: 9px; background: var(--purple-soft);
+    display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 13px;
+  }
+
+  /* тёмный экран поездки */
+  .screen.dark { background: #111018; color: #fff; }
+  .screen.dark .sbar { color: #fff; }
+  .trip-hero {
+    height: 240px; position: relative;
+    background: linear-gradient(180deg, #1b1a26 0%, #0c0b12 100%);
+    overflow: hidden;
+  }
+  .trip-hero .road {
+    position: absolute; left: 50%; top: 40%; transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 90px solid transparent; border-right: 90px solid transparent;
+    border-bottom: 340px solid rgba(255,255,255,.05);
+  }
+  .trip-title { position: absolute; top: 46px; left: 20px; font-size: 24px; font-weight: 900; line-height: 1.15; }
+  .trip-title .g { color: var(--green); }
+  .trip-title .p { color: var(--purple-light); }
+  .trip-car {
+    position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+    width: 96px; height: 44px; background: #2c2b38; border-radius: 14px 14px 8px 8px;
+    box-shadow: 0 0 40px rgba(101,69,237,.5);
+  }
+  .trip-car::after {
+    content: ""; position: absolute; inset: auto 14px -6px 14px; height: 6px;
+    background: var(--purple); border-radius: 999px; filter: blur(4px);
+  }
+  .drawer {
+    background: #fff; color: #232139;
+    border-radius: 26px 26px 0 0;
+    margin-top: -26px; position: relative; z-index: 2;
+    padding: 16px 18px 18px;
+    flex: 1;
+  }
+  .drawer .grab { width: 42px; height: 4px; background: #e2dfef; border-radius: 999px; margin: 0 auto 14px; }
+  .arrive { display: flex; justify-content: space-between; align-items: center; }
+  .arrive b { font-size: 34px; font-weight: 900; letter-spacing: -.02em; }
+  .arrive span { font-size: 11px; color: #858197; text-transform: uppercase; letter-spacing: .08em; display: block; }
+  .route-mini { font-size: 13px; color: #55526a; }
+  .route-mini div { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .metrics {
+    margin-top: 14px; background: #111018; border-radius: 18px;
+    display: flex; padding: 14px 6px;
+  }
+  .metrics div { flex: 1; text-align: center; color: #fff; }
+  .metrics b { display: block; font-size: 19px; font-weight: 900; color: var(--green); white-space: nowrap; }
+  .metrics span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+
+  /* кабинет исполнителя */
+  .balance-card {
+    background: linear-gradient(135deg, var(--purple), #4a2fc7);
+    color: #fff; border-radius: 20px; padding: 13px 16px;
+    box-shadow: 0 14px 30px rgba(101,69,237,.35);
+  }
+  .balance-card span { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; opacity: .8; }
+  .balance-card b { display: block; font-size: 28px; font-weight: 900; margin-top: 2px; }
+  .balance-card .hint { font-size: 10px; opacity: .8; margin-top: 4px; }
+  .roles { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
+  .role {
+    background: #fff; border: 1px solid #eeecf6; border-radius: 12px;
+    padding: 8px 10px; font-size: 11px; font-weight: 750;
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  }
+  .role.on { background: var(--purple); color: #fff; border-color: var(--purple); }
+  .role small { display: block; font-size: 9px; font-weight: 600; color: #9b98ab; white-space: nowrap; }
+  .role.on small { color: rgba(255,255,255,.75); }
+  .rl { display: flex; align-items: center; gap: 6px; }
+  .ico { width: 15px; height: 15px; flex: 0 0 auto; }
+  .geo, .btn-ghost { display: flex; align-items: center; justify-content: center; gap: 7px; }
+  .geo { justify-content: flex-start; }
+  .order-card {
+    background: #fff; border: 1px solid #eeecf6; border-radius: 16px;
+    padding: 11px 12px; margin-top: 9px; font-size: 11.5px;
+  }
+  .order-card .top { display: flex; justify-content: space-between; font-weight: 800; font-size: 13px; }
+  .order-card .price { color: var(--purple); font-size: 15px; font-weight: 900; }
+  .order-card .addr { color: #55526a; margin-top: 5px; line-height: 1.45; }
+  .tag {
+    display: inline-block; background: var(--purple-soft); color: var(--purple);
+    font-size: 10px; font-weight: 800; border-radius: 999px; padding: 3px 9px; margin-top: 6px;
+  }
+  .accept {
+    margin-top: 8px; background: var(--green); color: #17240a; text-align: center;
+    padding: 11px; border-radius: 13px; font-weight: 900; font-size: 14px;
+  }
+
+  .caption { font-size: 13px; color: var(--muted); text-align: center; max-width: 300px; }
+  .caption b { color: var(--ink); display: block; font-size: 15px; margin-bottom: 4px; }
+
+  /* парящие карточки-метрики */
+  .float-row { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; margin-top: 54px; }
+  .float-card {
+    background: var(--bg-card); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 18px; padding: 16px 20px; min-width: 190px;
+    box-shadow: 0 24px 50px rgba(0,0,0,.5);
+  }
+  .float-card .head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); }
+  .float-card .head .chip { background: var(--purple); color: #fff; border-radius: 999px; padding: 3px 10px; font-weight: 800; font-size: 11px; }
+  .float-card .route-txt { font-weight: 850; font-size: 15px; margin-top: 8px; }
+  .float-card .sub { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+  /* фичи */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .feat {
+    background: var(--bg-card); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 22px; padding: 26px 24px;
+    transition: transform .2s, border-color .2s;
+  }
+  .feat:hover { transform: translateY(-4px); border-color: rgba(168,146,255,.5); }
+  .feat .num { font-size: 12px; color: var(--purple-light); font-weight: 800; letter-spacing: .1em; }
+  .feat h3 { font-size: 19px; margin: 12px 0 8px; font-weight: 850; }
+  .feat p { font-size: 14px; color: #a5a2b5; line-height: 1.6; }
+
+  /* сравнение с конкурентами */
+  .cmp {
+    background: var(--bg-card); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 22px; overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 15px 18px; text-align: center; border-bottom: 1px solid rgba(255,255,255,.06); }
+  th { font-size: 12px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+  td:first-child, th:first-child { text-align: left; font-weight: 800; }
+  tr:last-child td { border-bottom: 0; }
+  tr.us { background: rgba(101,69,237,.16); }
+  tr.us td:first-child { color: var(--purple-light); }
+  .yes { color: var(--green); font-weight: 900; }
+  .no { color: #5b5870; }
+
+  footer { padding: 70px 0 90px; border-top: 1px solid rgba(255,255,255,.07); margin-top: 40px; }
+  footer .big { font-size: clamp(28px, 4vw, 44px); font-weight: 900; letter-spacing: -.02em; }
+  footer .big .accent { color: var(--purple-light); }
+  footer p { color: var(--muted); margin-top: 14px; font-size: 15px; }
+
+  @media (max-width: 720px) {
+    .phone { width: 270px; height: 570px; }
+    section { padding: 50px 0; }
+    th, td { padding: 11px 10px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="hero-tag"><span class="pill">Концепт-визуализация · вдохновлено Behance</span></div>
+    <h1>Про —<br>город на <span class="accent">одном</span> экране</h1>
+    <p class="hero-sub">
+      Такси, курьер, грузоперевозки, мастера, аренда авто и жилья — единый суперапп в мессенджере MAX.
+      Без установки, с балансом, рейтингом и уведомлениями.
+    </p>
+    <div class="hero-stats">
+      <div class="stat"><b>6</b><span>услуг в одном</span></div>
+      <div class="stat"><b>0 ₽</b><span>комиссии исполнителю на старте</span></div>
+      <div class="stat"><b>2 клика</b><span>до заказа</span></div>
+      <div class="stat"><b>MAX</b><span>пуши по всем событиям</span></div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="pill" style="margin-bottom:18px">Экран 01 — Клиент</span>
+        <h2>Заказ без карты: <span class="g">откуда, куда, готово</span></h2>
+      </div>
+      <p class="note">Тёмный герой + белая шторка снизу. Одна кнопка — одно действие. Автоопределение гео в одно касание.</p>
+    </div>
+
+    <div class="phones">
+      <!-- Главная -->
+      <div class="phone-col">
+        <div class="phone">
+          <div class="notch"></div>
+          <div class="screen">
+            <div class="sbar"><span>9:41</span><span>●●● ⚡</span></div>
+            <div class="sbody">
+              <div class="hello">Добрый день, Алексей</div>
+              <div class="hello-sub">Куда едем сегодня?</div>
+
+              <div class="map">
+                <div class="route">
+                  <svg viewBox="0 0 260 150" preserveAspectRatio="none">
+                    <path d="M30 120 C 90 100, 80 40, 150 45 S 225 60, 232 34"
+                          fill="none" stroke="#6545ed" stroke-width="4"
+                          stroke-linecap="round" stroke-dasharray="10 8"/>
+                  </svg>
+                </div>
+                <div class="pin" style="left:24px; bottom:22px"></div>
+                <div class="pin" style="right:22px; top:26px; background:#c9f24d"></div>
+              </div>
+
+              <div class="field"><span class="dot hole"></span> Откуда — ул. Красноармейская, 12</div>
+              <div class="field"><span class="dot"></span> Куда — аэропорт Витязево</div>
+              <div class="geo"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5"/></svg>Определить местоположение автоматически</div>
+
+              <div class="btn-primary">Рассчитать стоимость</div>
+              <div class="btn-ghost">Предзаказ для межгорода</div>
+            </div>
+          </div>
+        </div>
+        <p class="caption"><b>Главная клиента</b>Форма заказа без карты + авто-расчёт расстояния</p>
+      </div>
+
+      <!-- Поездка -->
+      <div class="phone-col">
+        <div class="phone">
+          <div class="notch"></div>
+          <div class="screen dark">
+            <div class="sbar"><span>9:41</span><span>●●● ⚡</span></div>
+            <div class="trip-hero">
+              <div class="road"></div>
+              <div class="trip-title">Исполнитель<br>в пути <span class="g">· 4 мин</span></div>
+              <div class="trip-car"></div>
+            </div>
+            <div class="drawer">
+              <div class="grab"></div>
+              <div class="arrive">
+                <div><span>Прибытие</span><b>4 мин</b></div>
+                <div class="route-mini">
+                  <div><span class="dot" style="width:8px;height:8px;border-radius:50%;background:#c3bcdf;display:inline-block"></span> Дом</div>
+                  <div><span style="width:8px;height:8px;border-radius:50%;background:#6545ed;display:inline-block"></span> Аэропорт</div>
+                </div>
+              </div>
+              <div class="metrics">
+                <div><b>4.9</b><span>рейтинг</span></div>
+                <div><b>12.4</b><span>км</span></div>
+                <div><b>640 ₽</b><span>фикс</span></div>
+              </div>
+              <div class="btn-ghost" style="background:#eee9ff"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5.5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="18.5" r="2.6"/><path d="M8.4 13.4l7.2 4M15.6 6.9l-7.2 4"/></svg>Поделиться поездкой</div>
+            </div>
+          </div>
+        </div>
+        <p class="caption"><b>Активная поездка</b>Тёмный герой, статус исполнителя, кнопка «поделиться» маршрутом</p>
+      </div>
+
+      <!-- Исполнитель -->
+      <div class="phone-col">
+        <div class="phone">
+          <div class="notch"></div>
+          <div class="screen">
+            <div class="sbar"><span>9:41</span><span>●●● ⚡</span></div>
+            <div class="sbody">
+              <div class="hello" style="font-size:18px">Кабинет исполнителя</div>
+
+              <div class="balance-card" style="margin-top:12px">
+                <span>Баланс</span>
+                <b>1 500 ₽</b>
+                <div class="hint">Пополнение из админки — сразу в кабинете</div>
+              </div>
+
+              <div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.08em; color:#858197; margin-top:14px">Роли · доход за неделю</div>
+              <div class="roles">
+                <div class="role on"><span class="rl"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l1.6-4.4A2 2 0 0 1 8.5 7.2h7a2 2 0 0 1 1.9 1.4L19 13v5h-2.6v-1.6H7.6V18H5z"/><circle cx="7.8" cy="15.4" r="1"/><circle cx="16.2" cy="15.4" r="1"/></svg>Такси</span><small>≈ 12 400 ₽</small></div>
+                <div class="role"><span class="rl"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5l9-4 9 4v9l-9 4-9-4z"/><path d="M3 7.5l9 4 9-4M12 11.5v9"/></svg>Курьер</span><small>≈ 7 100 ₽</small></div>
+                <div class="role"><span class="rl"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 6.5h12v10h-12z"/><path d="M13.5 9.5h4l3.5 3.5v3.5h-7.5"/><circle cx="6" cy="18.5" r="1.8"/><circle cx="17" cy="18.5" r="1.8"/></svg>Груз</span><small>≈ 18 900 ₽</small></div>
+                <div class="role"><span class="rl"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5.2a4.2 4.2 0 0 0-5.6 5.6L4 16.2 7.8 20l5.4-5.4a4.2 4.2 0 0 0 5.6-5.6l-2.6 2.6-2.2-.6-.6-2.2z"/></svg>Мастер</span><small>≈ 9 300 ₽</small></div>
+              </div>
+
+              <div class="order-card">
+                <div class="top"><span>Заказ #148</span><span class="price">640 ₽</span></div>
+                <div class="addr">ул. Набережная, 5 → ул. Красноармейская, 12<br>Стандарт · 12.4 км · 22 мин</div>
+                <span class="tag">Личная цена исполнителя</span>
+                <div class="accept">Принять за 15 секунд</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="caption"><b>Кабинет исполнителя</b>Баланс, мультирольность с подсказкой дохода, ставка исполнителя</p>
+      </div>
+    </div>
+
+    <!-- парящие карточки -->
+    <div class="float-row">
+      <div class="float-card">
+        <div class="head"><span>Сегодня · 09:14</span><span class="chip">Стандарт</span></div>
+        <div class="route-txt">Набережная → Аэропорт</div>
+        <div class="sub"><span>12.4 км</span><span>22 мин</span><span style="color:#a892ff; font-weight:800">640 ₽</span></div>
+      </div>
+      <div class="float-card">
+        <div class="head"><span>Оценка поездки</span><span class="chip">★ 5.0</span></div>
+        <div class="route-txt">«Быстро и аккуратно»</div>
+        <div class="sub"><span>like / dislike + комментарий</span></div>
+      </div>
+      <div class="float-card">
+        <div class="head"><span>Уведомление MAX</span><span class="chip">push</span></div>
+        <div class="route-txt">Исполнитель принял заказ</div>
+        <div class="sub"><span>принят · начат · завершён · отменён</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="pill" style="margin-bottom:18px">Что внутри</span>
+        <h2>Функции, которых нет <span class="g">у локальных конкурентов</span></h2>
+      </div>
+      <p class="note">Каждая карточка — уже работающая фича, а не план: оценка, share-маршрут, фикс-цена, каталог, рекламная аналитика.</p>
+    </div>
+
+    <div class="grid">
+      <div class="feat"><div class="num">01</div><h3>Оценка поездки</h3><p>Замыкает цикл «завершил → оценил»: клиент и исполнитель ставят like/dislike с комментарием. Только завершённый заказ, один раз.</p></div>
+      <div class="feat"><div class="num">02</div><h3>Поделиться поездкой</h3><p>Дешёвый SOS: близкий человек по ссылке видит маршрут и статус поездки в реальном времени.</p></div>
+      <div class="feat"><div class="num">03</div><h3>Мультирольность</h3><p>Переключатель ролей в профиле исполнителя с честной подсказкой дохода по каждой роли за неделю.</p></div>
+      <div class="feat"><div class="num">04</div><h3>MAX-пуши</h3><p>Все триггеры: исполнитель в пути, смена баланса, принят/начат/завершён/отменён — прямо в мессенджер.</p></div>
+      <div class="feat"><div class="num">05</div><h3>Услуги города</h3><p>Каталог мастеров с рейтингом, ценой и фото работ — как маркетплейс внутри супераппа.</p></div>
+      <div class="feat"><div class="num">06</div><h3>Умная реклама</h3><p>Статистика показов/кликов в админке и персонализация блоков под самую частую услугу пользователя.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="pill" style="margin-bottom:18px">Сравнение</span>
+        <h2>Что есть у нас.<br>Чего не хватает <span class="g">им</span></h2>
+      </div>
+      <p class="note">Анализ по локальному рынку: Яндекс Go, inDrive, Maxim — на деле не закрывают весь городской контур услуг.</p>
+    </div>
+
+    <div class="cmp">
+      <table>
+        <thead>
+          <tr>
+            <th>Сервис</th>
+            <th>Своя цена</th>
+            <th>Ставка исполнителя</th>
+            <th>Оценка двух сторон</th>
+            <th>Share-маршрут</th>
+            <th>Мультироль</th>
+            <th>Каталог услуг</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Яндекс Go</td><td class="no">✕</td><td class="no">✕</td><td class="yes">✓</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td></tr>
+          <tr><td>inDrive</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td></tr>
+          <tr><td>Maxim</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td></tr>
+          <tr class="us"><td>Про</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="big">Визуализация концепта <span class="accent">«Про»</span></div>
+    <p>
+      Стиль подсмотрен на Behance (проект Pilo — Autonomous Taxi App): тёмные экраны-герои, белые шторки,
+      пилюли-лейблы, парящие метрики и крупная типографика. Цветовой строй — фирменный фиолетовый #6545ed.
+      Реальные экраны живут в миниаппах: procityservice.ru/passenger · /driver · /admin
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

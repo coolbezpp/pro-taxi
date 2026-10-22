@@ -1,0 +1,30 @@
+procityservice.ru {
+    handle /api/* {
+        reverse_proxy api:8000
+    }
+
+    handle /passenger* {
+        uri strip_prefix /passenger
+        reverse_proxy passenger:80
+    }
+
+    handle /driver* {
+        uri strip_prefix /driver
+        reverse_proxy driver:80
+    }
+
+    handle /admin* {
+        uri strip_prefix /admin
+        reverse_proxy admin:80
+    }
+
+    # Векторные тайлы своего OSM-стека (PMTiles, Range поддержан nginx)
+    handle /tiles* {
+        uri strip_prefix /tiles
+        reverse_proxy osm-tiles:80
+    }
+
+    handle {
+        respond "Pro service is running" 200
+    }
+}

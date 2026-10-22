@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Про — Суперапп городских сервисов · Концепт v2 (светлый)</title>
+<style>
+  :root {
+    --purple: #6545ed;
+    --purple-dark: #4a2fc7;
+    --purple-deep: #35216e;
+    --purple-soft: #efeaff;
+    --purple-mist: #f6f3ff;
+    --ink: #1c1830;
+    --muted: #77738d;
+    --green: #17c07b;
+    --orange: #ff8a3d;
+    --line: #ece9f6;
+    --radius: 22px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #fff;
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 26px; }
+  .ico { width: 18px; height: 18px; flex: 0 0 auto; }
+
+  /* ============ HERO: большой фирменный блок ============ */
+  .hero {
+    background: var(--purple);
+    color: #fff;
+    padding: 34px 0 90px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: "";
+    position: absolute; right: -180px; top: -180px;
+    width: 620px; height: 620px; border-radius: 50%;
+    background: rgba(255,255,255,.07);
+  }
+  .hero::after {
+    content: "";
+    position: absolute; left: -140px; bottom: -260px;
+    width: 520px; height: 520px; border-radius: 50%;
+    background: rgba(255,255,255,.05);
+  }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    position: relative; z-index: 2;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 900; font-size: 22px; letter-spacing: -.02em;
+  }
+  .logo .mark {
+    width: 38px; height: 38px; border-radius: 12px; background: #fff;
+    color: var(--purple); display: flex; align-items: center; justify-content: center;
+    font-size: 19px; font-weight: 900;
+  }
+  .topnav { display: flex; gap: 26px; font-size: 14px; font-weight: 650; opacity: .9; }
+  .topnav span { cursor: default; }
+  .badge-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .badge {
+    background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.22);
+    padding: 7px 16px; border-radius: 999px; font-size: 12px; font-weight: 750;
+  }
+  .hero-grid {
+    display: grid; grid-template-columns: 1.05fr .95fr; gap: 40px;
+    align-items: center; position: relative; z-index: 2; margin-top: 54px;
+  }
+  h1 {
+    font-size: clamp(46px, 6.4vw, 86px);
+    font-weight: 900; letter-spacing: -.035em; line-height: .98;
+  }
+  .hero-sub { margin-top: 22px; font-size: 18px; max-width: 520px; opacity: .92; }
+  .cta-row { display: flex; gap: 14px; margin-top: 34px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 15px 28px; border-radius: 16px; font-weight: 800; font-size: 15px;
+    cursor: default;
+  }
+  .btn.white { background: #fff; color: var(--purple); }
+  .btn.outline { background: transparent; color: #fff; border: 1.5px solid rgba(255,255,255,.5); }
+  .hero-stats { display: flex; gap: 34px; margin-top: 44px; flex-wrap: wrap; }
+  .hero-stats b { display: block; font-size: 30px; font-weight: 900; letter-spacing: -.02em; }
+  .hero-stats span { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; opacity: .8; }
+
+  /* ============ ТЕЛЕФОН ============ */
+  .phone {
+    width: 330px; max-width: 100%; margin: 0 auto;
+    background: #fff; border-radius: 44px; padding: 11px;
+    box-shadow: 0 50px 100px rgba(30,15,90,.45);
+    border: 1px solid rgba(255,255,255,.5);
+  }
+  .screen {
+    background: var(--purple-mist); border-radius: 34px; overflow: hidden;
+    color: var(--ink); min-height: 640px; position: relative;
+    display: flex; flex-direction: column;
+  }
+  .sbar { display: flex; justify-content: space-between; padding: 13px 20px 2px; font-size: 11px; font-weight: 800; }
+  .sbody { padding: 10px 16px 18px; }
+  .s-hello { font-size: 13px; color: var(--muted); }
+  .s-title { font-size: 21px; font-weight: 900; letter-spacing: -.02em; margin-top: 1px; }
+  .search {
+    margin-top: 12px; background: #fff; border: 1px solid var(--line);
+    border-radius: 15px; padding: 12px 14px; font-size: 13px; color: var(--muted);
+    display: flex; align-items: center; gap: 9px;
+  }
+  .promo {
+    margin-top: 12px; border-radius: 18px; padding: 15px 16px;
+    background: linear-gradient(120deg, var(--purple), var(--purple-dark));
+    color: #fff; position: relative; overflow: hidden;
+  }
+  .promo::after {
+    content: ""; position: absolute; right: -30px; top: -30px;
+    width: 110px; height: 110px; border-radius: 50%; background: rgba(255,255,255,.12);
+  }
+  .promo .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; opacity: .85; }
+  .promo b { display: block; font-size: 18px; font-weight: 900; margin-top: 3px; }
+  .promo small { display: block; font-size: 11px; opacity: .85; margin-top: 2px; }
+  .promo .go {
+    display: inline-block; margin-top: 10px; background: #fff; color: var(--purple);
+    font-size: 12px; font-weight: 850; border-radius: 999px; padding: 6px 15px;
+  }
+  .sec-t { font-size: 13px; font-weight: 850; margin-top: 16px; display: flex; justify-content: space-between; align-items: center; }
+  .sec-t span { font-size: 11px; color: var(--purple); font-weight: 750; }
+  .svc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+  .svc {
+    background: #fff; border: 1px solid var(--line); border-radius: 15px;
+    padding: 11px 6px; text-align: center; font-size: 10px; font-weight: 750;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .svc i {
+    width: 32px; height: 32px; border-radius: 11px; background: var(--purple-soft);
+    color: var(--purple); display: flex; align-items: center; justify-content: center;
+  }
+  .svc i .ico { width: 17px; height: 17px; }
+  .order-line {
+    margin-top: 10px; background: #fff; border: 1px solid var(--line);
+    border-radius: 16px; padding: 12px 14px; font-size: 12px;
+  }
+  .order-line .r { display: flex; align-items: center; gap: 9px; color: #4b4761; }
+  .order-line .r + .r { margin-top: 8px; }
+  .order-line .d { width: 8px; height: 8px; border-radius: 50%; background: var(--purple); flex: 0 0 auto; }
+  .order-line .d.hole { background: #fff; border: 2px solid #c8c1e6; }
+  .btn-app {
+    margin-top: 12px; background: var(--purple); color: #fff; text-align: center;
+    padding: 14px; border-radius: 15px; font-weight: 850; font-size: 14px;
+    box-shadow: 0 12px 26px rgba(101,69,237,.3);
+  }
+  .tabbar {
+    margin-top: auto; background: #fff; border-top: 1px solid var(--line);
+    display: flex; justify-content: space-around; padding: 10px 6px 14px;
+    font-size: 9px; color: var(--muted); font-weight: 750;
+  }
+  .tabbar div { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .tabbar div.on { color: var(--purple); }
+  .tabbar .ico { width: 19px; height: 19px; }
+
+  /* ============ СЕКЦИИ ============ */
+  section { padding: 84px 0; }
+  .kicker {
+    display: inline-block; background: var(--purple-soft); color: var(--purple);
+    font-size: 12px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase;
+    padding: 8px 18px; border-radius: 999px;
+  }
+  h2 { font-size: clamp(30px, 4.2vw, 52px); font-weight: 900; letter-spacing: -.03em; margin-top: 20px; line-height: 1.05; }
+  h2 .p { color: var(--purple); }
+  .lead { color: var(--muted); font-size: 17px; max-width: 620px; margin-top: 16px; }
+
+  .svc-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 44px; }
+  .sc {
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 26px 24px;
+    background: #fff; transition: box-shadow .2s, transform .2s;
+  }
+  .sc:hover { box-shadow: 0 20px 44px rgba(60,40,140,.12); transform: translateY(-3px); }
+  .sc i {
+    width: 46px; height: 46px; border-radius: 15px; background: var(--purple-soft);
+    color: var(--purple); display: flex; align-items: center; justify-content: center;
+  }
+  .sc i .ico { width: 23px; height: 23px; }
+  .sc h3 { font-size: 18px; margin-top: 16px; font-weight: 850; }
+  .sc p { color: var(--muted); font-size: 14px; margin-top: 7px; }
+  .sc .pill {
+    display: inline-block; margin-top: 12px; font-size: 11px; font-weight: 800;
+    background: var(--purple-mist); color: var(--purple); border-radius: 999px; padding: 4px 12px;
+  }
+
+  /* шаги */
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px; margin-top: 44px; }
+  .step { background: var(--purple-mist); border-radius: var(--radius); padding: 26px 24px; position: relative; }
+  .step b {
+    width: 34px; height: 34px; border-radius: 11px; background: var(--purple); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 900;
+  }
+  .step h4 { font-size: 16px; margin-top: 14px; font-weight: 850; }
+  .step p { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+
+  /* сравнение */
+  .cmp { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-top: 40px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; background: #fff; }
+  th, td { padding: 15px 18px; text-align: center; border-bottom: 1px solid var(--line); }
+  th { font-size: 12px; color: var(--muted); font-weight: 750; text-transform: uppercase; letter-spacing: .05em; background: var(--purple-mist); }
+  td:first-child, th:first-child { text-align: left; font-weight: 850; }
+  tr:last-child td { border-bottom: 0; }
+  tr.us { background: var(--purple-soft); }
+  tr.us td:first-child { color: var(--purple-dark); }
+  .yes { color: var(--green); font-weight: 900; }
+  .no { color: #c3bfd4; }
+
+  /* метрики */
+  .metrics-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 40px; }
+  .mcard { border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; }
+  .mcard b { font-size: 34px; font-weight: 900; color: var(--purple); letter-spacing: -.02em; }
+  .mcard span { display: block; font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  footer { background: var(--ink); color: #fff; padding: 70px 0; margin-top: 20px; }
+  footer .big { font-size: clamp(24px, 3.4vw, 38px); font-weight: 900; letter-spacing: -.02em; }
+  footer .big .p { color: var(--purple-light, #a892ff); }
+  footer p { color: #9d99b3; margin-top: 14px; font-size: 14px; max-width: 760px; }
+  footer .links { display: flex; gap: 22px; margin-top: 26px; font-size: 13px; font-weight: 750; color: #cfccdd; flex-wrap: wrap; }
+
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .topnav { display: none; }
+    th, td { padding: 11px 9px; font-size: 12px; }
+    section { padding: 56px 0; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="topbar">
+      <div class="logo"><span class="mark">П</span> Про</div>
+      <nav class="topnav"><span>Такси</span><span>Курьер</span><span>Груз</span><span>Мастера</span><span>Аренда</span><span>Жильё</span></nav>
+    </div>
+
+    <div class="hero-grid">
+      <div>
+        <div class="badge-row">
+          <span class="badge">Суперапп в мессенджере MAX</span>
+          <span class="badge">Без установки</span>
+        </div>
+        <h1>Весь город<br>в одном приложении</h1>
+        <p class="hero-sub">
+          Закажи такси, курьера, грузоперевозки, найди мастера, арендуй авто или жильё —
+          в одном окне, с единым балансом и живыми уведомлениями.
+        </p>
+        <div class="cta-row">
+          <span class="btn white">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l1.6-4.4A2 2 0 0 1 8.5 7.2h7a2 2 0 0 1 1.9 1.4L19 13v5h-2.6v-1.6H7.6V18H5z"/><circle cx="7.8" cy="15.4" r="1"/><circle cx="16.2" cy="15.4" r="1"/></svg>
+            Вызвать такси
+          </span>
+          <span class="btn outline">Стать исполнителем</span>
+        </div>
+        <div class="hero-stats">
+          <div><b>6 сервисов</b><span>в одном окне</span></div>
+          <div><b>2 клика</b><span>до заказа</span></div>
+          <div><b>24/7</b><span>поддержка города</span></div>
+        </div>
+      </div>
+
+      <div class="phone">
+        <div class="screen">
+          <div class="sbar"><span>9:41</span><span>●●● ⚡</span></div>
+          <div class="sbody">
+            <div class="s-hello">Анапа · Добрый день</div>
+            <div class="s-title">Что вам нужно?</div>
+
+            <div class="search">
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+              Такси, курьер, мастер, аренда…
+            </div>
+
+            <div class="promo">
+              <div class="lbl">Реклама · для вас</div>
+              <b>−20% на поездки по городу</b>
+              <small>Действует до конца недели · промокод ПРО20</small>
+              <span class="go">Заказать</span>
+            </div>
+
+            <div class="sec-t">Сервисы <span>Все ›</span></div>
+            <div class="svc-grid">
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l1.6-4.4A2 2 0 0 1 8.5 7.2h7a2 2 0 0 1 1.9 1.4L19 13v5h-2.6v-1.6H7.6V18H5z"/><circle cx="7.8" cy="15.4" r="1"/><circle cx="16.2" cy="15.4" r="1"/></svg></i>Такси</div>
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5l9-4 9 4v9l-9 4-9-4z"/><path d="M3 7.5l9 4 9-4M12 11.5v9"/></svg></i>Курьер</div>
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 6.5h12v10h-12z"/><path d="M13.5 9.5h4l3.5 3.5v3.5h-7.5"/><circle cx="6" cy="18.5" r="1.8"/><circle cx="17" cy="18.5" r="1.8"/></svg></i>Груз</div>
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5.2a4.2 4.2 0 0 0-5.6 5.6L4 16.2 7.8 20l5.4-5.4a4.2 4.2 0 0 0 5.6-5.6l-2.6 2.6-2.2-.6-.6-2.2z"/></svg></i>Мастер</div>
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-3.2L12 5l8 7.8V16"/><path d="M9 19v-4h6v4"/></svg></i>Аренда</div>
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 4l9 6.5V20H3z"/><path d="M9.5 20v-5h5v5"/></svg></i>Жильё</div>
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z"/><path d="M4 10h16"/></svg></i>Оплата</div>
+              <div class="svc"><i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></i>Профиль</div>
+            </div>
+
+            <div class="order-line">
+              <div class="r"><span class="d hole"></span> ул. Набережная, 5</div>
+              <div class="r"><span class="d"></span> Аэропорт Витязево</div>
+            </div>
+            <div class="btn-app">Рассчитать стоимость · 640 ₽</div>
+          </div>
+          <div class="tabbar">
+            <div class="on">
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-6.5 8 6.5V20H4z"/></svg>
+              Главная
+            </div>
+            <div>
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l1.6-4.4A2 2 0 0 1 8.5 7.2h7a2 2 0 0 1 1.9 1.4L19 13v5h-2.6v-1.6H7.6V18H5z"/></svg>
+              Поездки
+            </div>
+            <div>
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5l9-4 9 4v9l-9 4-9-4z"/><path d="M3 7.5l9 4 9-4M12 11.5v9"/></svg>
+              Услуги
+            </div>
+            <div>
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+              Мои
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <span class="kicker">Сервисы</span>
+    <h2>Шесть направлений — <span class="p">одно приложение</span></h2>
+    <p class="lead">Клиент, курьер, грузоперевозки, услуги мастеров, аренда авто и посуточное жильё живут в одном аккаунте, с общим балансом и общей историей заказов.</p>
+
+    <div class="svc-cards">
+      <div class="sc">
+        <i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l1.6-4.4A2 2 0 0 1 8.5 7.2h7a2 2 0 0 1 1.9 1.4L19 13v5h-2.6v-1.6H7.6V18H5z"/><circle cx="7.8" cy="15.4" r="1"/><circle cx="16.2" cy="15.4" r="1"/></svg></i>
+        <h3>Такси</h3>
+        <p>Фикс-цена при заказе, своя цена или аукцион ставок исполнителей. Предзаказ и межгород.</p>
+        <span class="pill">Фикс · Своя цена · Ставка</span>
+      </div>
+      <div class="sc">
+        <i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5l9-4 9 4v9l-9 4-9-4z"/><path d="M3 7.5l9 4 9-4M12 11.5v9"/></svg></i>
+        <h3>Курьер</h3>
+        <p>Доставка посылок и покупок по городу с отслеживанием и оценкой курьера.</p>
+        <span class="pill">До 30 кг</span>
+      </div>
+      <div class="sc">
+        <i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 6.5h12v10h-12z"/><path d="M13.5 9.5h4l3.5 3.5v3.5h-7.5"/><circle cx="6" cy="18.5" r="1.8"/><circle cx="17" cy="18.5" r="1.8"/></svg></i>
+        <h3>Груз</h3>
+        <p>Газели и фургоны с грузчиками для переездов и доставки крупногабаритного.</p>
+        <span class="pill">С грузчиками</span>
+      </div>
+      <div class="sc">
+        <i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5.2a4.2 4.2 0 0 0-5.6 5.6L4 16.2 7.8 20l5.4-5.4a4.2 4.2 0 0 0 5.6-5.6l-2.6 2.6-2.2-.6-.6-2.2z"/></svg></i>
+        <h3>Мастера</h3>
+        <p>Каталог специалистов города: сантехника, электрика, ремонт — с рейтингом и фото работ.</p>
+        <span class="pill">Каталог с оценками</span>
+      </div>
+      <div class="sc">
+        <i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-3.2L12 5l8 7.8V16"/><path d="M9 19v-4h6v4"/></svg></i>
+        <h3>Аренда авто</h3>
+        <p>Автомобили в аренду для поездок и работы — в том числе для исполнителей сервиса.</p>
+        <span class="pill">Для исполнителей</span>
+      </div>
+      <div class="sc">
+        <i><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 4l9 6.5V20H3z"/><path d="M9.5 20v-5h5v5"/></svg></i>
+        <h3>Жильё</h3>
+        <p>Посуточная аренда apartments и домов в городе и пригороде — напрямую от хозяев.</p>
+        <span class="pill">Посуточно</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="background: var(--purple-mist);">
+  <div class="wrap">
+    <span class="kicker">Как это работает</span>
+    <h2>Заказ без карты: <span class="p">откуда, куда, готово</span></h2>
+    <p class="lead">Никаких сложных карт и лишних экранов. Два поля, автоопределение геолокации и фиксированная цена до подтверждения.</p>
+
+    <div class="steps">
+      <div class="step">
+        <b>1</b>
+        <h4>Откуда — Куда</h4>
+        <p>Два поля и кнопка «Определить автоматически» по геолокации из MAX.</p>
+      </div>
+      <div class="step">
+        <b>2</b>
+        <h4>Цена сразу</h4>
+        <p>Фикс-цена при заказе, своя цена или аукцион ставок исполнителей.</p>
+      </div>
+      <div class="step">
+        <b>3</b>
+        <h4>Исполнитель в пути</h4>
+        <p>Push в MAX на каждом шаге: принят, в пути, завершён.</p>
+      </div>
+      <div class="step">
+        <b>4</b>
+        <h4>Оценка</h4>
+        <p>После поездки — оценка исполнителя и обратно. Замыкает цикл качества.</p>
+      </div>
+    </div>
+
+    <div class="metrics-row">
+      <div class="mcard"><b>640 ₽</b><span>фикс-цена до подтверждения</span></div>
+      <div class="mcard"><b>4 мин</b><span>среднее прибытие по городу</span></div>
+      <div class="mcard"><b>★ 4.9</b><span>рейтинг исполнителей Анапы</span></div>
+      <div class="mcard"><b>0 ₽</b><span>комиссии исполнителю на старте</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="kicker">Сравнение</span>
+    <h2>Что есть у нас. <span class="p">Чего не хватает им</span></h2>
+    <p class="lead">Локальный рынок: Яндекс Go, inDrive и Maxim не закрывают весь городской контур услуг.</p>
+
+    <div class="cmp">
+      <table>
+        <thead>
+          <tr>
+            <th>Сервис</th>
+            <th>Своя цена</th>
+            <th>Ставка исполнителя</th>
+            <th>Оценка двух сторон</th>
+            <th>Share-маршрут</th>
+            <th>Мультироль</th>
+            <th>Каталог услуг</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Яндекс Go</td><td class="no">✕</td><td class="no">✕</td><td class="yes">✓</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td></tr>
+          <tr><td>inDrive</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td></tr>
+          <tr><td>Maxim</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td><td class="no">✕</td></tr>
+          <tr class="us"><td>Про</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="big">Концепт-визуализация <span class="p">«Про» · вариант 2</span></div>
+    <p>
+      Светлая эстетика супераппа подсмотрена на Behance (проект Garevo — Agentic AI Super App UI UX Design):
+      большой фирменный блок с вывеской, белый интерфейс с мягкими карточками, сетка сервисов-плиток,
+      промо-баннер и нижняя навигация. Цветовой строй — фирменный фиолетовый #6545ed.
+      Первый (тёмный) вариант — в файле concept-showcase.html. Живые миниаппы: procityservice.ru/passenger · /driver · /admin
+    </p>
+    <div class="links"><span>Такси</span><span>Курьер</span><span>Груз</span><span>Мастера</span><span>Аренда авто</span><span>Жильё</span></div>
+  </div>
+</footer>
+
+</body>
+</html>

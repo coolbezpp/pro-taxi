@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Работа</title>
+<style>
+body { font-family: system-ui; background:#f4f6f8; margin:0; padding:16px; }
+.card { background:#fff; border-radius:16px; padding:16px; margin-bottom:12px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+h1 { font-size:22px; }
+input, textarea, select { width:100%; padding:12px; margin-bottom:10px; border:1px solid #ddd; border-radius:12px; box-sizing:border-box; }
+button { width:100%; padding:14px; border:0; border-radius:12px; background:#2563eb; color:#fff; font-size:16px; }
+.secondary { background:#e5e7eb; color:#111; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<h1>Работа</h1>
+
+<div class="card">
+  <h3>Разместить вакансию</h3>
+  <input id="title" placeholder="Название вакансии">
+  <textarea id="description" rows="3" placeholder="Описание"></textarea>
+  <input id="city" placeholder="Город">
+  <input id="salary" placeholder="Зарплата">
+  <input id="schedule" placeholder="График">
+  <select id="role">
+    <option value="">Любая роль</option>
+    <option value="driver">Исполнитель</option>
+    <option value="courier">Курьер</option>
+    <option value="loader">Грузчик</option>
+    <option value="master">Мастер</option>
+  </select>
+  <button onclick="createJob()">Опубликовать</button>
+</div>
+
+<div class="card">
+  <h3>Поиск вакансий</h3>
+  <input id="searchCity" placeholder="Город">
+  <select id="searchRole">
+    <option value="">Любая роль</option>
+    <option value="driver">Исполнитель</option>
+    <option value="courier">Курьер</option>
+    <option value="loader">Грузчик</option>
+    <option value="master">Мастер</option>
+  </select>
+  <button onclick="loadJobs()">Найти</button>
+</div>
+
+<div id="jobs"></div>
+
+<button class="secondary" onclick="location.href='/'">Назад</button>
+
+<script>
+const API = "";
+
+async function api(path, options = {}) {
+  const res = await fetch(API + path, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    alert(data.detail || "Ошибка");
+    throw new Error(data.detail || "Ошибка");
+  }
+
+  return data;
+}
+
+async function createJob() {
+  await api("/jobs", {
+    method: "POST",
+    body: JSON.stringify({
+      title: title.value,
+      description: description.value,
+      city: city.value,
+      salary: salary.value,
+      schedule: schedule.value,
+      role: role.value,
+    }),
+  });
+
+  alert("Вакансия опубликована");
+  loadJobs();
+}
+
+async function loadJobs() {
+  const params = new URLSearchParams();
+
+  if (searchCity.value) params.set("city", searchCity.value);
+  if (searchRole.value) params.set("role", searchRole.value);
+
+  const data = await api("/jobs?" + params.toString());
+  const box = document.getElementById("jobs");
+  box.innerHTML = "";
+
+  if (!data.jobs.length) {
+    box.innerHTML = "<div class='card'>Вакансий пока нет</div>";
+    return;
+  }
+
+  data.jobs.forEach(j => {
+    const div = document.createElement("div");
+    div.className = "card";
+    div.innerHTML = `
+      <h3>${j.title}</h3>
+      <p>${j.description}</p>
+      <p><b>Город:</b> ${j.city}</p>
+      <p><b>Зарплата:</b> ${j.salary || "не указана"}</p>
+      <p><b>График:</b> ${j.schedule || "не указан"}</p>
+      <button onclick="respond(${j.id})">Откликнуться — 50 ₽</button>
+    `;
+    box.appendChild(div);
+  });
+}
+
+async function respond(id) {
+  if (!confirm("Отклик стоит 50 ₽. Продолжить?")) return;
+
+  await api(`/jobs/${id}/respond`, { method: "POST" });
+  alert("Отклик отправлен");
+}
+
+loadJobs();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мои объявления</title>
+<style>
+body { font-family: system-ui; background:#f4f6f8; margin:0; padding:16px; }
+.card { background:#fff; border-radius:16px; padding:16px; margin-bottom:12px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+h1 { font-size:22px; }
+.booking { border-top:1px solid #eee; margin-top:12px; padding-top:12px; }
+button { width:100%; padding:12px; border:0; border-radius:12px; background:#2563eb; color:#fff; font-size:15px; margin-top:8px; }
+.secondary { background:#e5e7eb; color:#111; }
+</style>
+</head>
+<body>
+
+<h1>Мои объявления</h1>
+<div id="listings"></div>
+
+<button class="secondary" onclick="location.href='/'">Назад</button>
+
+<script>
+async function load() {
+  const res = await fetch("/my/rentals", { credentials: "include" });
+  const data = await res.json();
+  const box = document.getElementById("listings");
+  box.innerHTML = "";
+
+  if (!data.listings.length) {
+    box.innerHTML = "<div class='card'>У вас пока нет объявлений</div>";
+    return;
+  }
+
+  data.listings.forEach(r => {
+    const div = document.createElement("div");
+    div.className = "card";
+
+    let bookings = "<p>Броней пока нет</p>";
+
+    if (r.bookings.length) {
+      bookings = r.bookings.map(b => `
+        <div class="booking">
+          <b>${b.client_name}</b><br>
+          ${b.start_date} — ${b.end_date}<br>
+          ${b.days} дн. · ${b.total_price} ₽<br>
+          Комиссия: ${b.commission} ₽<br>
+          Статус: ${b.status}<br>
+          ${b.status === "pending" ? `
+            <button onclick="confirmBooking(${b.id})">Подтвердить бронь</button>
+          ` : ""}
+        </div>
+      `).join("");
+    }
+
+    div.innerHTML = `
+      <h3>${r.title}</h3>
+      <p>${r.type === "car" ? "Авто" : "Жильё"} · ${r.city}</p>
+      <p>Статус: ${r.status}</p>
+      ${bookings}
+    `;
+
+    box.appendChild(div);
+  });
+}
+
+async function confirmBooking(id) {
+  const res = await fetch(`/rentals/bookings/${id}/confirm`, {
+    method: "POST",
+    credentials: "include",
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    alert(data.detail || "Ошибка");
+    return;
+  }
+
+  alert("Бронь подтверждена");
+  load();
+}
+
+load();
+</script>
+
+</body>
+</html>

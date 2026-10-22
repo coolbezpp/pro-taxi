@@ -1,0 +1,63 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes: [db_data:/var/lib/postgresql/data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: &default_logging
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      MEDIA_DIR: /app/media
+    volumes:
+      - ads_data:/app/media
+    depends_on:
+      db: {condition: service_healthy}
+    # Только localhost: наружу трафик идёт через Caddy (TLS)
+    ports: ["127.0.0.1:8000:8000"]
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    logging: *default_logging
+  passenger:
+    build: ./miniapps/passenger
+    # 3001 на хосте занят процессом pm2 (max-bots) — Caddy ходит по сети
+    # по имени контейнера, поэтому наружный порт тут не критичен.
+    ports: ["127.0.0.1:3011:80"]
+    restart: unless-stopped
+    logging: *default_logging
+  driver:
+    build: ./miniapps/driver
+    ports: ["127.0.0.1:3002:80"]
+    restart: unless-stopped
+    logging: *default_logging
+  admin:
+    build: ./admin
+    ports: ["127.0.0.1:3000:80"]
+    restart: unless-stopped
+    logging: *default_logging
+  caddy:
+    image: caddy:2
+    ports: ["80:80","443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      api: {condition: service_started}
+      passenger: {condition: service_started}
+      driver: {condition: service_started}
+      admin: {condition: service_started}
+    restart: unless-stopped
+    logging: *default_logging
+volumes: {db_data: {}, caddy_data: {}, ads_data: {}}

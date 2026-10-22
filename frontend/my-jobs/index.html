@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мои вакансии</title>
+<style>
+body { font-family: system-ui; background:#f4f6f8; margin:0; padding:16px; }
+.card { background:#fff; border-radius:16px; padding:16px; margin-bottom:12px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+h1 { font-size:22px; }
+button { width:100%; padding:12px; border:0; border-radius:12px; background:#2563eb; color:#fff; font-size:15px; margin-top:8px; }
+.secondary { background:#e5e7eb; color:#111; }
+</style>
+</head>
+<body>
+
+<h1>Мои вакансии</h1>
+<div id="jobs"></div>
+
+<button class="secondary" onclick="location.href='/'">Назад</button>
+
+<script>
+async function load() {
+  const res = await fetch("/my/jobs", { credentials: "include" });
+  const data = await res.json();
+  const box = document.getElementById("jobs");
+  box.innerHTML = "";
+
+  if (!data.jobs.length) {
+    box.innerHTML = "<div class='card'>У вас пока нет вакансий</div>";
+    return;
+  }
+
+  data.jobs.forEach(j => {
+    const div = document.createElement("div");
+    div.className = "card";
+
+    const responses = j.responses.length
+      ? j.responses.map(r => `
+          <div style="margin-top:8px;">
+            <b>${r.name}</b><br>
+            Телефон: ${r.phone || "не указан"}
+          </div>
+        `).join("")
+      : "<p>Откликов пока нет</p>";
+
+    div.innerHTML = `
+      <h3>${j.title}</h3>
+      <p>Город: ${j.city}</p>
+      <p>Статус: ${j.status}</p>
+      ${responses}
+    `;
+
+    box.appendChild(div);
+  });
+}
+
+load();
+</script>
+
+</body>
+</html>

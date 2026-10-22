@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аренда</title>
+<style>
+body { font-family: system-ui; background:#f4f6f8; margin:0; padding:16px; }
+.card { background:#fff; border-radius:16px; padding:16px; margin-bottom:12px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+h1 { font-size:22px; }
+input, textarea, select { width:100%; padding:12px; margin-bottom:10px; border:1px solid #ddd; border-radius:12px; box-sizing:border-box; }
+button { width:100%; padding:14px; border:0; border-radius:12px; background:#2563eb; color:#fff; font-size:16px; }
+.secondary { background:#e5e7eb; color:#111; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<h1>Аренда</h1>
+
+<div class="card">
+  <h3>Разместить объявление</h3>
+  <select id="type">
+    <option value="car">Авто</option>
+    <option value="housing">Жильё</option>
+  </select>
+  <input id="title" placeholder="Название">
+  <textarea id="description" rows="3" placeholder="Описание"></textarea>
+  <input id="city" placeholder="Город">
+  <input id="address" placeholder="Адрес">
+  <input id="price" type="number" placeholder="Цена за сутки">
+  <input id="deposit" type="number" placeholder="Залог">
+  <button onclick="createListing()">Опубликовать</button>
+</div>
+
+<div class="card">
+  <h3>Поиск</h3>
+  <select id="searchType">
+    <option value="">Всё</option>
+    <option value="car">Авто</option>
+    <option value="housing">Жильё</option>
+  </select>
+  <input id="searchCity" placeholder="Город">
+  <button onclick="loadListings()">Найти</button>
+</div>
+
+<div id="listings"></div>
+
+<button class="secondary" onclick="location.href='/'">Назад</button>
+
+<script>
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    alert(data.detail || "Ошибка");
+    throw new Error(data.detail || "Ошибка");
+  }
+
+  return data;
+}
+
+async function createListing() {
+  await api("/rentals", {
+    method: "POST",
+    body: JSON.stringify({
+      type: type.value,
+      title: title.value,
+      description: description.value,
+      city: city.value,
+      address: address.value,
+      price_per_day: price.value,
+      deposit: deposit.value,
+    }),
+  });
+
+  alert("Объявление опубликовано");
+  loadListings();
+}
+
+async function loadListings() {
+  const params = new URLSearchParams();
+
+  if (searchType.value) params.set("type", searchType.value);
+  if (searchCity.value) params.set("city", searchCity.value);
+
+  const data = await api("/rentals?" + params.toString());
+  const box = document.getElementById("listings");
+  box.innerHTML = "";
+
+  if (!data.listings.length) {
+    box.innerHTML = "<div class='card'>Объявлений пока нет</div>";
+    return;
+  }
+
+  data.listings.forEach(r => {
+    const div = document.createElement("div");
+    div.className = "card";
+    div.innerHTML = `
+      <h3>${r.title}</h3>
+      <p>${r.description}</p>
+      <p><b>Тип:</b> ${r.type === "car" ? "Авто" : "Жильё"}</p>
+      <p><b>Город:</b> ${r.city}</p>
+      <p><b>Цена:</b> ${r.price_per_day} ₽ / сутки</p>
+      <p><b>Залог:</b> ${r.deposit} ₽</p>
+      <input type="date" id="start-${r.id}">
+      <input type="date" id="end-${r.id}">
+      <button onclick="book(${r.id})">Забронировать</button>
+    `;
+    box.appendChild(div);
+  });
+}
+
+async function book(id) {
+  const start = document.getElementById(`start-${id}`).value;
+  const end = document.getElementById(`end-${id}`).value;
+
+  const data = await api(`/rentals/${id}/book`, {
+    method: "POST",
+    body: JSON.stringify({ start_date: start, end_date: end }),
+  });
+
+  alert(`Бронь создана. Сумма: ${data.total_price} ₽, комиссия сервиса: ${data.commission} ₽`);
+}
+
+loadListings();
+</script>
+
+</body>
+</html>

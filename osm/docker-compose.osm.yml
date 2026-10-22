@@ -1,0 +1,68 @@
+# OSM-стек «Про»: геокодер + маршруты + тайлы
+# Запуск: docker compose -f docker-compose.osm.yml up -d
+# Проект подключается к сети основного стека pro (external), чтобы api
+# ходил к сервисам по именам контейнеров без открытия портов наружу.
+
+services:
+  nominatim:
+    image: mediagis/nominatim:5.3
+    container_name: osm-nominatim
+    restart: unless-stopped
+    stop_grace_period: 300s
+    volumes:
+      - nominatim-data:/var/lib/postgresql/16/main
+      - ./nominatim-flatnode:/nominatim/flatnode
+      - ./data:/nominatim/data:ro
+    environment:
+      PBF_PATH: /nominatim/data/kkr.osm.pbf
+      THREADS: "1"
+      GUNICORN_WORKERS: "1"
+      IMPORT_STYLE: "address"          # адреса до дома; POI не тянем — экономим память и диск
+      IMPORT_WIKIPEDIA: "false"
+      NOMINATIM_PASSWORD: "${NOMINATIM_PASSWORD:?задайте NOMINATIM_PASSWORD в .env}"
+      POSTGRES_SHARED_BUFFERS: "256MB"
+      POSTGRES_MAINTENANCE_WORK_MEM: "128MB"
+      POSTGRES_AUTOVACUUM_WORK_MEM: "64MB"
+      POSTGRES_WORK_MEM: "16MB"
+      POSTGRES_EFFECTIVE_CACHE_SIZE: "1GB"
+      POSTGRES_MAX_CONNECTIONS: "30"
+    shm_size: 512mb
+    mem_limit: 1400m                   # сервер 2 ГБ — держим в рамках, остальное своп
+    ports:
+      - "127.0.0.1:8080:8080"          # наружу только через reverse proxy api
+    networks:
+      - pro
+
+  osrm-routed:
+    image: osrm/osrm-backend:v5.25.0
+    container_name: osm-osrm
+    restart: unless-stopped
+    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "1000", "/data/osrm"]
+    volumes:
+      - ./data/osrm:/data
+    mem_limit: 600m
+    ports:
+      - "127.0.0.1:5000:5000"
+    networks:
+      - pro
+
+  tiles:
+    image: nginx:1.27-alpine
+    container_name: osm-tiles
+    restart: unless-stopped
+    volumes:
+      - ./data/tiles:/usr/share/nginx/html:ro
+      - ./nginx-tiles.conf:/etc/nginx/conf.d/default.conf:ro
+    mem_limit: 128m
+    ports:
+      - "127.0.0.1:8081:80"
+    networks:
+      - pro
+
+volumes:
+  nominatim-data:
+
+networks:
+  pro:
+    external: true
+    name: ${PRO_NETWORK:-pro_default}
