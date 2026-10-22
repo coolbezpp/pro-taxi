@@ -832,6 +832,273 @@ function ExecutorPhotoChecksPage({ me, t, m, onBack }) {
 }
 
 // Информация: договоры и юридические сведения
+function ExecutorVehiclePage({ me, t, m, onBack }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [mileage, setMileage] = useState("");
+  const [savingMileage, setSavingMileage] = useState(false);
+  const [form, setForm] = useState({ title: "", note: "", done_at: "", done_mileage: "", interval_km: "" });
+  const [adding, setAdding] = useState(false);
+
+  async function load() {
+    try {
+      const res = await api(`/executors/${me.id}/vehicle`);
+      setData(res);
+      setMileage(res?.vehicle?.mileage != null ? String(res.vehicle.mileage) : "");
+    } catch (e) {
+      setError(e.message || "Не удалось загрузить транспорт");
+    }
+  }
+
+  useEffect(() => { load(); }, [me.id]);
+
+  async function saveMileage() {
+    setSavingMileage(true);
+    setError("");
+    try {
+      await api(`/executors/${me.id}/vehicle/mileage`, {
+        method: "PUT",
+        body: { mileage: Number(mileage || 0) },
+      });
+      await load();
+    } catch (e) {
+      setError(e.message || "Не удалось сохранить пробег");
+    } finally {
+      setSavingMileage(false);
+    }
+  }
+
+  async function addWork() {
+    if (!String(form.title || "").trim()) {
+      setError("Укажите название работы");
+      return;
+    }
+    setAdding(true);
+    setError("");
+    try {
+      await api(`/executors/${me.id}/maintenance`, {
+        method: "POST",
+        body: {
+          title: form.title,
+          note: form.note || null,
+          done_at: form.done_at ? new Date(form.done_at).toISOString() : null,
+          done_mileage: Number(form.done_mileage || 0),
+          interval_km: Number(form.interval_km || 0),
+        },
+      });
+      setForm({ title: "", note: "", done_at: "", done_mileage: "", interval_km: "" });
+      await load();
+    } catch (e) {
+      setError(e.message || "Не удалось добавить работу");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function removeWork(id) {
+    try {
+      await api(`/executors/${me.id}/maintenance/${id}`, { method: "DELETE" });
+      await load();
+    } catch (e) {
+      setError(e.message || "Не удалось удалить запись");
+    }
+  }
+
+  const v = data?.vehicle;
+  const items = Array.isArray(data?.maintenance) ? data.maintenance : [];
+  const dueCount = Number(data?.maintenance_due_count || 0);
+  const inputStyle = {
+    width: "100%", padding: "11px 12px", borderRadius: 12,
+    border: `1px solid ${m.cardAltBorder}`,
+    background: m.cardAlt, color: m.text, fontSize: 14,
+    fontFamily: "inherit", boxSizing: "border-box",
+  };
+
+  return (
+    <div style={{ padding: "14px 16px 30px", background: m.bg, minHeight: "100dvh" }}>
+      <SubPageHeader m={m} title="Мой транспорт" onBack={onBack} />
+
+      {data?.reminder && (
+        <div style={{
+          marginBottom: 12, padding: 12, borderRadius: 14,
+          background: t.accentSoft, color: t.accent, fontSize: 13, fontWeight: 700,
+        }}>{data.reminder}</div>
+      )}
+
+      {/* Карточка авто — заполняет администратор/оператор */}
+      <div style={{
+        padding: 16, borderRadius: 18, background: m.card, border: `1px solid ${m.cardAltBorder}`,
+      }}>
+        <strong style={{ fontSize: 14, color: m.text }}>Автомобиль</strong>
+        {!v ? (
+          <p style={{ margin: "8px 0 0", fontSize: 13, color: m.sub, lineHeight: 1.5 }}>
+            Транспорт не оформлен. Данные автомобиля заполняет администратор при регистрации.
+          </p>
+        ) : (
+          <>
+            <div style={{ marginTop: 8, fontSize: 15, fontWeight: 800, color: m.text }}>
+              {[v.brand, v.model].filter(Boolean).join(" ") || "Марка не указана"}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+              {v.plate && (
+                <span style={{
+                  padding: "6px 12px", borderRadius: 10, background: m.cardAlt,
+                  border: `1px solid ${m.cardAltBorder}`, color: m.text,
+                  fontSize: 15, fontWeight: 900, letterSpacing: 1,
+                }}>{v.plate}</span>
+              )}
+              {v.color && <span style={{ fontSize: 13, color: m.sub, alignSelf: "center" }}>{v.color}</span>}
+              {v.year ? <span style={{ fontSize: 13, color: m.sub, alignSelf: "center" }}>{v.year} г.в.</span> : null}
+              {v.seats ? <span style={{ fontSize: 13, color: m.sub, alignSelf: "center" }}>{v.seats} мест</span> : null}
+              <span style={{
+                marginLeft: "auto", alignSelf: "center", fontSize: 11.5, fontWeight: 800,
+                color: v.approved ? t.success : m.sub,
+              }}>{v.approved ? "Проверен" : "На проверке"}</span>
+            </div>
+
+            {/* Текущий пробег — по нему считается срок работ по ТО */}
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="0"
+                placeholder="Текущий пробег, км"
+                value={mileage}
+                onChange={e => setMileage(e.target.value)}
+                style={inputStyle}
+              />
+              <button
+                onClick={saveMileage}
+                disabled={savingMileage}
+                style={{
+                  padding: "0 14px", borderRadius: 12, border: 0, cursor: "pointer",
+                  background: t.accent, color: t.onAccent, fontWeight: 800,
+                  fontSize: 12.5, fontFamily: "inherit", flexShrink: 0,
+                }}
+              >{savingMileage ? "…" : "Сохранить"}</button>
+            </div>
+            <p style={{ margin: "8px 0 0", fontSize: 12, color: m.sub, lineHeight: 1.45 }}>
+              По пробегу система следит, какие работы по ТО пора повторить.
+            </p>
+          </>
+        )}
+      </div>
+
+      {/* Техобслуживание: работы с пробегом и интервалом повтора */}
+      <div style={{
+        marginTop: 12, padding: 16, borderRadius: 18, background: m.card,
+        border: `1px solid ${m.cardAltBorder}`,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <strong style={{ fontSize: 14, color: m.text }}>Техобслуживание</strong>
+          {dueCount > 0 && (
+            <span style={{
+              padding: "4px 10px", borderRadius: 999, background: t.dangerSoft,
+              color: t.danger, fontSize: 11.5, fontWeight: 800,
+            }}>{dueCount} пора повторить</span>
+          )}
+        </div>
+
+        {items.length === 0 ? (
+          <p style={{ margin: "8px 0 0", fontSize: 13, color: m.sub, lineHeight: 1.5 }}>
+            Внесите работы по обслуживанию: замена масла, колодки и т.п. —
+            с пробегом на момент выполнения и интервалом повтора.
+          </p>
+        ) : items.map(item => (
+          <div key={item.id} style={{
+            marginTop: 10, padding: 12, borderRadius: 14,
+            background: item.due ? t.dangerSoft : m.cardAlt,
+            border: `1px solid ${item.due ? t.danger : "transparent"}`,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <strong style={{ fontSize: 13.5, color: m.text }}>{item.title}</strong>
+              <button
+                onClick={() => removeWork(item.id)}
+                aria-label="Удалить"
+                style={{
+                  border: 0, background: "transparent", color: m.sub, cursor: "pointer",
+                  fontSize: 16, lineHeight: 1, padding: 0, fontFamily: "inherit",
+                }}
+              >✕</button>
+            </div>
+            <div style={{ fontSize: 12, color: m.sub, marginTop: 4, lineHeight: 1.45 }}>
+              {item.done_at ? `Выполнено: ${new Date(item.done_at).toLocaleDateString("ru-RU")} · ` : ""}
+              пробег {Number(item.done_mileage || 0).toLocaleString("ru-RU")} км
+              {item.interval_km > 0 ? ` · повторять каждые ${Number(item.interval_km).toLocaleString("ru-RU")} км` : ""}
+            </div>
+            {item.due && (
+              <div style={{ fontSize: 12, fontWeight: 800, color: t.danger, marginTop: 4 }}>
+                Пора повторить — отметка {Number(item.due_at_mileage).toLocaleString("ru-RU")} км пройдена
+              </div>
+            )}
+            {item.note && (
+              <div style={{ fontSize: 12, color: m.sub, marginTop: 4 }}>{item.note}</div>
+            )}
+          </div>
+        ))}
+
+        {/* Добавление работы самим исполнителем */}
+        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+          <input
+            placeholder="Название работы (например, замена масла)"
+            value={form.title}
+            onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+            style={inputStyle}
+          />
+          <input
+            placeholder="Заметка: сервис, детали (необязательно)"
+            value={form.note}
+            onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+            style={inputStyle}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="date"
+              value={form.done_at}
+              onChange={e => setForm(f => ({ ...f, done_at: e.target.value }))}
+              style={inputStyle}
+            />
+            <input
+              type="number"
+              inputMode="numeric"
+              min="0"
+              placeholder="Пробег, км"
+              value={form.done_mileage}
+              onChange={e => setForm(f => ({ ...f, done_mileage: e.target.value }))}
+              style={inputStyle}
+            />
+          </div>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            placeholder="Повторять через, км (0 — без повтора)"
+            value={form.interval_km}
+            onChange={e => setForm(f => ({ ...f, interval_km: e.target.value }))}
+            style={inputStyle}
+          />
+          <button
+            onClick={addWork}
+            disabled={adding}
+            style={{
+              padding: 13, borderRadius: 12, border: 0, cursor: "pointer",
+              background: t.accent, color: t.onAccent, fontWeight: 800,
+              fontSize: 13.5, fontFamily: "inherit",
+            }}
+          >{adding ? "Добавляем…" : "Добавить работу"}</button>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{
+          marginTop: 12, padding: 12, borderRadius: 12,
+          background: t.dangerSoft, color: t.danger, fontSize: 13, fontWeight: 700,
+        }}>{error}</div>
+      )}
+    </div>
+  );
+}
+
 function ExecutorInfoPage({ t, m, onBack }) {
   const docs = [
     ["Оферта исполнителя", "Условия работы, порядок приёма и выполнения заказов, размер комиссии."],
@@ -1239,7 +1506,7 @@ function ExecutorSupportPage({ me, t, m, onBack }) {
   );
 }
 
-function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread, onStats, onNotifications, onPhotoChecks, onInfo, onChangeRole, onSupport }) {
+function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread, vehicleDue, onStats, onNotifications, onPhotoChecks, onVehicle, onInfo, onChangeRole, onSupport }) {
   const m = maxPalette(t.mode);
   const maxUser = readMaxUser();
   const name = maxUser?.first_name || maxUser?.username || me.name || me.max_id || "Исполнитель";
@@ -1349,6 +1616,9 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
           badge={unread}
           onClick={onNotifications} />
         <MaxRow m={m} icon={<Icon name="camera" size={20} />} label="Фотоконтроль" onClick={onPhotoChecks} />
+        <MaxRow m={m} icon={<Icon name="taxi" size={20} />} label="Мой транспорт"
+          badge={vehicleDue}
+          onClick={onVehicle} />
         <MaxRow m={m} icon={<Icon name="doc" size={20} />} label="Информация" onClick={onInfo} />
         <MaxRow m={m} icon={<Icon name="support" size={20} />} label="Поддержка" onClick={onSupport} />
       </MaxGroup>
@@ -1486,6 +1756,7 @@ export default function App() {
   const [online, setOnline] = useState(false);
   const [work, setWork] = useState(null);
   const [unread, setUnread] = useState(0);
+  const [vehicleDue, setVehicleDue] = useState(0);
   const [orders, setOrders] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
   const [incoming, setIncoming] = useState(null);
@@ -1653,10 +1924,20 @@ export default function App() {
     } catch (e) {}
   }
 
+  // Счётчик работ по ТО, которые пора повторить по пробегу
+  async function loadVehicleDue() {
+    if (!me) return;
+    try {
+      const res = await api(`/executors/${me.id}/vehicle`);
+      setVehicleDue(Number(res?.maintenance_due_count || 0));
+    } catch (e) {}
+  }
+
   useEffect(() => {
     if (!me) return;
     loadWork();
     loadUnread();
+    loadVehicleDue();
     const it = setInterval(loadWork, 60000);
     const it2 = setInterval(loadUnread, 30000);
     return () => { clearInterval(it); clearInterval(it2); };
@@ -2210,9 +2491,11 @@ export default function App() {
               activeRole={activeRole}
               earnings={earnings}
               unread={unread}
+              vehicleDue={vehicleDue}
               onStats={() => goPage("stats")}
               onNotifications={() => goPage("notifications")}
               onPhotoChecks={() => goPage("photo")}
+              onVehicle={() => goPage("vehicle")}
               onInfo={() => goPage("info")}
               onChangeRole={() => goPage("roles")}
               onSupport={() => goPage("support")}
@@ -2250,6 +2533,10 @@ export default function App() {
 
           {page === "photo" && me && (
             <ExecutorPhotoChecksPage me={me} t={t} m={m} onBack={backPage} />
+          )}
+
+          {page === "vehicle" && me && (
+            <ExecutorVehiclePage me={me} t={t} m={m} onBack={backPage} />
           )}
 
           {page === "info" && (

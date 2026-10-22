@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import Client, Executor, Order, OrderEvent, OrderMessage, User
+from ..models import Client, Executor, Order, OrderEvent, OrderMessage, User, ExecutorVehicle
 from ..security import bearer_scheme
 
 router = APIRouter(prefix="/api", tags=["tracking"])
@@ -185,6 +185,17 @@ def track_order(
                 "lon": executor.last_lon,
                 "updated_at": executor.last_seen_at.isoformat() if executor.last_seen_at else None,
             }
+            # Транспорт: клиент видит авто исполнителя при заказе транспортных услуг
+            vehicle = db.query(ExecutorVehicle).filter(
+                ExecutorVehicle.executor_id == executor.id
+            ).first()
+            if vehicle and (vehicle.brand or vehicle.plate):
+                executor_info["vehicle"] = {
+                    "brand": vehicle.brand,
+                    "model": vehicle.model,
+                    "color": vehicle.color,
+                    "plate": vehicle.plate,
+                }
             # Приватность: клиент видит позицию только по правилам сервиса
             # (мастер — никогда; cargo/межгород — за 10 минут до начала).
             if role == "client" and not _location_visible_to_client(db, order):

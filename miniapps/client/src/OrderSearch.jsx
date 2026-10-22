@@ -141,6 +141,12 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
                 Рейтинг {executor.rating_likes} / {executor.rating_dislikes}
                 {executor.lat != null ? " · на связи" : ""}
               </span>
+              {executor.vehicle && (
+                <span style={{ display: "block", fontSize: 12.5, color: t.text, marginTop: 3, fontWeight: 700 }}>
+                  {[executor.vehicle.brand, executor.vehicle.model].filter(Boolean).join(" ")}
+                  {executor.vehicle.plate ? ` · ${executor.vehicle.plate}` : ""}
+                </span>
+              )}
             </span>
           </div>
         )}

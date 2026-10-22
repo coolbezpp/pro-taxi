@@ -205,6 +205,9 @@ export default function App() {
   const [profileId, setProfileId] = useState(null);
   const [profile, setProfile] = useState(null);
   const [noteText, setNoteText] = useState("");
+  // Транспорт исполнителя (в карточке профиля)
+  const [vehicleForm, setVehicleForm] = useState(null);
+  const [vehicleSaving, setVehicleSaving] = useState(false);
   // Лента сообщений оператора
   const [messages, setMessages] = useState([]);
   const [replyText, setReplyText] = useState({});
@@ -428,8 +431,37 @@ export default function App() {
       });
       const data = await res.json().catch(() => ({}));
       setProfile(data);
+      const v = data.vehicle || {};
+      setVehicleForm({
+        brand: v.brand || "", model: v.model || "", color: v.color || "",
+        plate: v.plate || "", year: v.year || "", seats: v.seats || "",
+        approved: !!v.approved,
+      });
     } catch (e) {
       setError(e.message || "Не удалось загрузить профиль");
+    }
+  }
+
+  async function saveVehicle() {
+    if (!profileId || !vehicleForm) return;
+    setVehicleSaving(true);
+    try {
+      const res = await fetch(`${API}/admin/executors/${profileId}/vehicle`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...vehicleForm,
+          year: vehicleForm.year ? Number(vehicleForm.year) : null,
+          seats: vehicleForm.seats ? Number(vehicleForm.seats) : null,
+        }),
+      });
+      const saved = await res.json().catch(() => ({}));
+      setProfile(p => p && ({ ...p, vehicle: saved }));
+    } catch (e) {
+      setError(e.message || "Не удалось сохранить транспорт");
+    } finally {
+      setVehicleSaving(false);
     }
   }
 
@@ -1775,6 +1807,86 @@ export default function App() {
                         ? ` Смена началась ${new Date(profile.work.started_at).toLocaleString("ru-RU")}.`
                         : " Смена не начата."}
                     </p>
+                  </div>
+
+                  {/* Транспорт: заполняет админ, данные уходят клиенту при заказе */}
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontWeight: 800, fontSize: 15 }}>Транспорт</div>
+                    <p style={{ margin: "4px 0 8px", fontSize: 12.5, color: "#77748a" }}>
+                      Марка, госномер и прочие данные — их клиент видит при заказе транспортных услуг.
+                      {profile.vehicle?.mileage != null && ` Текущий пробег: ${Number(profile.vehicle.mileage).toLocaleString("ru-RU")} км.`}
+                    </p>
+                    {vehicleForm && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {[
+                          ["brand", "Марка"],
+                          ["model", "Модель"],
+                          ["color", "Цвет"],
+                          ["plate", "Госномер"],
+                          ["year", "Год"],
+                          ["seats", "Мест"],
+                        ].map(([key, label]) => (
+                          <input
+                            key={key}
+                            placeholder={label}
+                            value={vehicleForm[key]}
+                            onChange={e => setVehicleForm(f => ({ ...f, [key]: e.target.value }))}
+                            style={{
+                              flex: "1 1 130px", padding: "9px 11px", borderRadius: 10,
+                              border: "1px solid #e2dff0", fontSize: 13.5, fontFamily: "inherit",
+                            }}
+                          />
+                        ))}
+                        <label style={{
+                          display: "flex", alignItems: "center", gap: 6, fontSize: 13,
+                          color: "#55525f", flex: "1 1 130px", padding: "9px 4px",
+                        }}>
+                          <input
+                            type="checkbox"
+                            checked={vehicleForm.approved}
+                            onChange={e => setVehicleForm(f => ({ ...f, approved: e.target.checked }))}
+                          />
+                          Проверен
+                        </label>
+                        <button
+                          onClick={saveVehicle}
+                          disabled={vehicleSaving}
+                          style={{
+                            flex: "1 1 100%", padding: 10, borderRadius: 10, border: 0,
+                            background: "#2c7bf6", color: "#fff", fontWeight: 800,
+                            fontSize: 13.5, cursor: "pointer", fontFamily: "inherit",
+                          }}
+                        >{vehicleSaving ? "Сохраняем…" : "Сохранить транспорт"}</button>
+                      </div>
+                    )}
+
+                    {/* Техобслуживание — вносит исполнитель, админ видит */}
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontWeight: 750, fontSize: 13.5 }}>Техобслуживание</div>
+                      {(profile.maintenance || []).length === 0 ? (
+                        <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "#77748a" }}>
+                          Работы по ТО не вносились
+                        </p>
+                      ) : profile.maintenance.map(item => (
+                        <div key={item.id} style={{
+                          display: "flex", justifyContent: "space-between", gap: 8,
+                          padding: "7px 0", borderBottom: "1px solid #eeecf3", fontSize: 13,
+                        }}>
+                          <span>
+                            <strong>{item.title}</strong>
+                            {item.note ? ` · ${item.note}` : ""}
+                            <small style={{ display: "block", color: "#9a97ab", fontSize: 11.5, marginTop: 2 }}>
+                              {item.done_at ? `Выполнено: ${new Date(item.done_at).toLocaleDateString("ru-RU")} · ` : ""}
+                              пробег {item.done_mileage} км
+                              {item.interval_km > 0 ? ` · повтор каждые ${item.interval_km} км` : ""}
+                            </small>
+                          </span>
+                          {item.due && (
+                            <strong style={{ color: "#d92b45", flexShrink: 0, fontSize: 12 }}>Пора повторить</strong>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Операции по балансу */}

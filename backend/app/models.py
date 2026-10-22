@@ -122,6 +122,44 @@ class ExecutorPhotoCheck(Base):
     answered_at=Column(DateTime,nullable=True)
 
 
+class ExecutorVehicle(Base):
+    """Транспорт исполнителя: заполняет администратор/оператор при
+    регистрации, исполнитель видит и обновляет пробег (нужен для
+    раздела «Техобслуживание»)."""
+    __tablename__="executor_vehicles"
+
+    id=Column(Integer,primary_key=True)
+    executor_id=Column(Integer,index=True,unique=True,nullable=False)
+    brand=Column(String,nullable=True)              # марка
+    model=Column(String,nullable=True)              # модель
+    color=Column(String,nullable=True)              # цвет
+    plate=Column(String,nullable=True)              # госномер
+    year=Column(Integer,nullable=True)              # год выпуска
+    seats=Column(Integer,nullable=True)             # мест (включая водителя)
+    photo_url=Column(Text,nullable=True)            # фото авто (data-URL)
+    mileage=Column(Integer,nullable=True,default=0) # текущий пробег, км
+    approved=Column(Boolean,nullable=True,default=False)  # проверено админом
+    last_reminder_at=Column(DateTime,nullable=True) # напоминание о техобслуживании
+    created_at=Column(DateTime,server_default=func.now())
+    updated_at=Column(DateTime,nullable=True)
+
+
+class VehicleMaintenance(Base):
+    """Работы по техобслуживанию авто: исполнитель вносит выполненную
+    работу, пробег на момент выполнения и интервал повтора в км."""
+    __tablename__="vehicle_maintenance"
+
+    id=Column(Integer,primary_key=True)
+    executor_id=Column(Integer,index=True,nullable=False)
+    title=Column(String,nullable=False)                    # работа: «замена масла»…
+    note=Column(String,nullable=True)                      # заметка (сервис, детали)
+    done_at=Column(DateTime,nullable=True)                 # дата выполнения
+    done_mileage=Column(Integer,nullable=True,default=0)   # пробег при выполнении, км
+    interval_km=Column(Integer,nullable=True,default=0)    # повторять через N км
+    notified_at=Column(DateTime,nullable=True)             # напоминание о сроке отправлено
+    created_at=Column(DateTime,server_default=func.now())
+
+
 class ExecutorWorkSession(Base):
     """Рабочая смена исполнителя: отсчёт 12 часов идёт от первого принятого заказа."""
     __tablename__="executor_work_sessions"

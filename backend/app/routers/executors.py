@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import (
     Executor, ExecutorRole, Order, ExecutorBalanceOp, ExecutorPhotoCheck,
-    Notification, OperatorMessage,
+    Notification, OperatorMessage, ExecutorVehicle, VehicleMaintenance,
 )
 from ..config import settings
 from ..security import bearer_scheme, create_token, get_admin, get_current_executor
@@ -499,6 +499,13 @@ def admin_executor_profile(
         Order.executor_id == executor_id
     ).order_by(Order.id.desc()).limit(20).all()
 
+    vehicle = db.query(ExecutorVehicle).filter(
+        ExecutorVehicle.executor_id == executor_id
+    ).first()
+    maint = db.query(VehicleMaintenance).filter(
+        VehicleMaintenance.executor_id == executor_id
+    ).order_by(VehicleMaintenance.id.desc()).all()
+
     return {
         "executor": {
             "id": executor.id,
@@ -526,6 +533,11 @@ def admin_executor_profile(
             "created_at": op.created_at.isoformat() if op.created_at else None,
         } for op in ops],
         "photo_checks": [_photo_check_json(p) for p in photos],
+        "vehicle": _vehicle_json(vehicle) if vehicle else None,
+        "maintenance": [
+            _maintenance_json(m, int(vehicle.mileage or 0) if vehicle else 0)
+            for m in maint
+        ],
         "orders": [{
             "id": o.id,
             "status": o.status,
@@ -544,7 +556,10 @@ def get_profile(
     db: Session = Depends(get_db),
 ):
     _require_same(executor, executor_id)
-    return executor_profile(db, get_executor(db, executor_id))
+    current = get_executor(db, executor_id)
+    # Ежемесячная проверка техобслуживания — напоминание при каждом открытии приложения
+    _maybe_maintenance_reminder(db, current)
+    return executor_profile(db, current)
 
 
 @router.get("/executors/{executor_id}/balance-history")
@@ -1030,6 +1045,245 @@ def admin_decide_photo_check(
             pass
 
     return _photo_check_json(row)
+
+
+# --- Транспорт исполнителя и техобслуживание -----------------------------
+
+class AdminVehicleIn(BaseModel):
+    """Карточка транспорта: заполняет администратор/оператор при регистрации."""
+    brand: str | None = None
+    model: str | None = None
+    color: str | None = None
+    plate: str | None = None
+    year: int | None = None
+    seats: int | None = None
+    photo_url: str | None = None
+    approved: bool = False
+
+
+class MileageIn(BaseModel):
+    mileage: int
+
+
+class MaintenanceIn(BaseModel):
+    title: str
+    note: str | None = None
+    done_at: str | None = None       # ISO-дата выполнения
+    done_mileage: int = 0            # пробег на момент выполнения, км
+    interval_km: int = 0             # повторять через N км
+
+
+def _vehicle_json(v):
+    return {
+        "id": v.id,
+        "executor_id": v.executor_id,
+        "brand": v.brand,
+        "model": v.model,
+        "color": v.color,
+        "plate": v.plate,
+        "year": v.year,
+        "seats": v.seats,
+        "photo_url": v.photo_url,
+        "mileage": int(v.mileage or 0),
+        "approved": bool(v.approved),
+        "last_reminder_at": v.last_reminder_at.isoformat() if v.last_reminder_at else None,
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+        "updated_at": v.updated_at.isoformat() if v.updated_at else None,
+    }
+
+
+def _maintenance_json(item, mileage=0):
+    """due — пора повторить: текущий пробег дотянул до отметки повтора."""
+    interval = int(item.interval_km or 0)
+    due_at = (int(item.done_mileage or 0) + interval) if interval > 0 else None
+    return {
+        "id": item.id,
+        "title": item.title,
+        "note": item.note,
+        "done_at": item.done_at.isoformat() if item.done_at else None,
+        "done_mileage": int(item.done_mileage or 0),
+        "interval_km": interval,
+        "due_at_mileage": due_at,
+        "due": bool(due_at is not None and mileage >= due_at),
+        "notified_at": item.notified_at.isoformat() if item.notified_at else None,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+def _parse_iso_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _maybe_maintenance_reminder(db, executor):
+    """Раз в месяц напоминаем исполнителю проверить раздел «Техобслуживание»."""
+    vehicle = db.query(ExecutorVehicle).filter(
+        ExecutorVehicle.executor_id == executor.id
+    ).first()
+    if not vehicle:
+        return None
+    now = datetime.utcnow()
+    if vehicle.last_reminder_at and (now - vehicle.last_reminder_at) < timedelta(days=30):
+        return None
+    db.add(Notification(
+        user_max_id=str(executor.max_id),
+        title="Техобслуживание",
+        body="Проверьте раздел «Техобслуживание» — обновите данные о работах по авто.",
+        category="service",
+    ))
+    vehicle.last_reminder_at = now
+    db.commit()
+    return "Проверьте раздел «Техобслуживание»."
+
+
+@router.get("/executors/{executor_id}/vehicle")
+def get_vehicle(
+    executor_id: int,
+    executor: Executor = Depends(get_current_executor),
+    db: Session = Depends(get_db),
+):
+    """Транспорт исполнителя: карточку авто заполняет админ, работы по ТО —
+    сам исполнитель. При открытии раз в месяц шлём напоминание проверить раздел."""
+    _require_same(executor, executor_id)
+    vehicle = db.query(ExecutorVehicle).filter(
+        ExecutorVehicle.executor_id == executor_id
+    ).first()
+    reminder = _maybe_maintenance_reminder(db, executor)
+    mileage = int(vehicle.mileage or 0) if vehicle else 0
+    items = db.query(VehicleMaintenance).filter(
+        VehicleMaintenance.executor_id == executor_id
+    ).order_by(VehicleMaintenance.id.desc()).all()
+    maintenance = [_maintenance_json(it, mileage) for it in items]
+    return {
+        "vehicle": _vehicle_json(vehicle) if vehicle else None,
+        "maintenance": maintenance,
+        "maintenance_due_count": sum(1 for m in maintenance if m["due"]),
+        "reminder": reminder,
+    }
+
+
+@router.put("/executors/{executor_id}/vehicle/mileage")
+def set_vehicle_mileage(
+    executor_id: int,
+    data: MileageIn,
+    executor: Executor = Depends(get_current_executor),
+    db: Session = Depends(get_db),
+):
+    """Исполнитель обновляет текущий пробег; по нему считается срок работ по ТО."""
+    _require_same(executor, executor_id)
+    vehicle = db.query(ExecutorVehicle).filter(
+        ExecutorVehicle.executor_id == executor_id
+    ).first()
+    if not vehicle:
+        raise HTTPException(404, "Транспорт не оформлен — обратитесь к администратору")
+    vehicle.mileage = max(0, int(data.mileage or 0))
+    vehicle.updated_at = datetime.utcnow()
+    db.commit()
+
+    # Просроченные по пробегу работы — напоминаем один раз на работу.
+    due_items = db.query(VehicleMaintenance).filter(
+        VehicleMaintenance.executor_id == executor_id,
+        VehicleMaintenance.notified_at.is_(None),
+    ).all()
+    notified = 0
+    for item in due_items:
+        interval = int(item.interval_km or 0)
+        if interval <= 0:
+            continue
+        if vehicle.mileage < (int(item.done_mileage or 0) + interval):
+            continue
+        db.add(Notification(
+            user_max_id=str(executor.max_id),
+            title="Техобслуживание",
+            body=f"Пора повторить: {item.title} (отметка {item.done_mileage + interval} км).",
+            category="service",
+        ))
+        item.notified_at = datetime.utcnow()
+        notified += 1
+    db.commit()
+    return {"ok": True, "mileage": vehicle.mileage, "due_notified": notified}
+
+
+@router.post("/executors/{executor_id}/maintenance")
+def add_maintenance(
+    executor_id: int,
+    data: MaintenanceIn,
+    executor: Executor = Depends(get_current_executor),
+    db: Session = Depends(get_db),
+):
+    """Исполнитель вносит выполненную работу по авто и интервал повтора в км."""
+    _require_same(executor, executor_id)
+    title = (data.title or "").strip()
+    if not title:
+        raise HTTPException(400, "Укажите название работы")
+    item = VehicleMaintenance(
+        executor_id=executor_id,
+        title=title[:120],
+        note=(data.note or "").strip() or None,
+        done_at=_parse_iso_date(data.done_at),
+        done_mileage=max(0, int(data.done_mileage or 0)),
+        interval_km=max(0, int(data.interval_km or 0)),
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    vehicle = db.query(ExecutorVehicle).filter(
+        ExecutorVehicle.executor_id == executor_id
+    ).first()
+    return _maintenance_json(item, int(vehicle.mileage or 0) if vehicle else 0)
+
+
+@router.delete("/executors/{executor_id}/maintenance/{item_id}")
+def delete_maintenance(
+    executor_id: int,
+    item_id: int,
+    executor: Executor = Depends(get_current_executor),
+    db: Session = Depends(get_db),
+):
+    _require_same(executor, executor_id)
+    item = db.query(VehicleMaintenance).filter(
+        VehicleMaintenance.id == item_id,
+        VehicleMaintenance.executor_id == executor_id,
+    ).first()
+    if not item:
+        raise HTTPException(404, "Запись не найдена")
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/admin/executors/{executor_id}/vehicle")
+def admin_set_vehicle(
+    executor_id: int,
+    data: AdminVehicleIn,
+    admin=Depends(get_admin),
+    db: Session = Depends(get_db),
+):
+    """Карточка транспорта из админки: марка, госномер и прочие данные.
+    Из неё клиент видит информацию об авто при заказе транспортных услуг."""
+    get_executor(db, executor_id)
+    vehicle = db.query(ExecutorVehicle).filter(
+        ExecutorVehicle.executor_id == executor_id
+    ).first()
+    if not vehicle:
+        vehicle = ExecutorVehicle(executor_id=executor_id)
+        db.add(vehicle)
+    vehicle.brand = (data.brand or "").strip() or None
+    vehicle.model = (data.model or "").strip() or None
+    vehicle.color = (data.color or "").strip() or None
+    vehicle.plate = (data.plate or "").strip() or None
+    vehicle.year = data.year if data.year else None
+    vehicle.seats = data.seats if data.seats else None
+    vehicle.photo_url = data.photo_url or None
+    vehicle.approved = bool(data.approved)
+    vehicle.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(vehicle)
+    return _vehicle_json(vehicle)
 
 
 @router.post("/executors/{executor_id}/roles")
