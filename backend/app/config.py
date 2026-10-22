@@ -5,5 +5,7 @@ class Settings(BaseSettings):
     max_client_bot_token: str = ""
     max_executor_bot_token: str = ""
     commission_percent: float = 15.0
+    # Телефоны (через запятую), которым разрешено брать свои же заказы
+    self_order_exempt: str = ""
     class Config: env_file = ".env"
 settings = Settings()

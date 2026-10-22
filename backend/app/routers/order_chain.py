@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import Order, Executor, ExecutorRole, Client, Rating
 from ..services.max_notify import send_max_message
+from ..services.selforder import self_order_blocked
 
 router = APIRouter(tags=["order-chain"])
 
@@ -93,6 +94,12 @@ def reserve_chain(order_id: int, next_order_id: int, executor_id: int, db: Sessi
 
     if is_intercity(current) and not reverse_match(current, next_order):
         raise HTTPException(400, "Для межгорода доступен только встречный заказ в обратном направлении")
+
+    # Анти-самозаказы: свой заказ в цепочку тоже брать нельзя
+    executor = db.query(Executor).get(executor_id)
+    so = self_order_blocked(db, next_order, executor)
+    if so:
+        raise HTTPException(403, so)
 
     next_order.status = "chain_reserved"
     next_order.chain_reserved_order_id = current.id

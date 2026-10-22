@@ -562,6 +562,9 @@ def available_orders(executor_id: int, role: str, db: Session = Depends(get_db))
 
     result = []
     for o in orders:
+        # Анти-самозаказы: свои заказы не показываем в пуле
+        if self_order_blocked(db, o, executor):
+            continue
         meta = dict(o.meta or {})
         if (o.service or "") == "master":
             ms_id = meta.get("master_service_id")
@@ -598,6 +601,11 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
 
     if executor.status != "approved":
         raise HTTPException(403, "Исполнитель не прошёл верификацию")
+
+    # Анти-самозаказы: заказ на тот же номер телефона, что у исполнителя — нельзя
+    so = self_order_blocked(db, o, executor)
+    if so:
+        raise HTTPException(403, so)
 
     # Контроль рабочего времени: нельзя принять заказ при лимите 12 ч или во время отдыха
     work = worktime.work_state(db, driver_id)
@@ -896,6 +904,7 @@ from .routers.executors import router as executors_router
 from .routers.tracking import router as tracking_router
 from .services.eta import estimate_completion
 from .services.max_notify import send_max_message
+from .services.selforder import self_order_blocked
 
 app.include_router(executors_router)
 app.include_router(tracking_router)
@@ -1168,6 +1177,11 @@ def executor_order_action(
         if order.status != "created" or order.driver_id:
             raise HTTPException(400, "Заказ уже занят или недоступен")
 
+        # Анти-самозаказы: свой же номер у клиента и исполнителя — нельзя
+        so = self_order_blocked(db, order, executor)
+        if so:
+            raise HTTPException(403, so)
+
         # Контроль рабочего времени: при лимите или во время отдыха заказ не принять
         work = worktime.work_state(db, executor.id)
         if work.get("status") == worktime.STATUS_BLOCKED:
@@ -1288,7 +1302,9 @@ def executor_available_orders(
     if service:
         query = query.filter(models.Order.service == service)
 
-    orders = query.order_by(models.Order.id.desc()).limit(50).all()
+    # Анти-самозаказы: свои заказы не показываем в пуле
+    orders = [o for o in query.order_by(models.Order.id.desc()).limit(50).all()
+              if not self_order_blocked(db, o, executor)]
 
     return {"orders": [{
         "id": o.id,
