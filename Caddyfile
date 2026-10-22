@@ -1,4 +1,10 @@
 procityservice.ru {
+    # Веб-вью MAX кэширует index.html без cache-control: миниапп мог жить
+    # на старом бандле (например, без загрузки списка заказов) неделями.
+    # Всё, кроме тайлов OSM, отдаём без локального кэша.
+    @nocache not path /tiles*
+    header @nocache Cache-Control "no-store"
+
     handle /api/* {
         reverse_proxy api:8000
     }

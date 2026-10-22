@@ -284,7 +284,12 @@ export default function App() {
   // а не закрывает миниапп (см. эффект с WebApp.BackButton ниже).
   const [nav, setNav] = React.useState({ page: "home", stack: [] });
   const page = nav.page;
-  const goPage = (next) => setNav(n => ({ page: next, stack: [...n.stack, n.page] }));
+  const goPage = (next) => {
+    // Раздел «Заказы» — всегда свежий список с сервера (не полагаемся
+    // только на загрузку при старте: старые веб-вью могли её не дождаться)
+    if (next === "orders") loadMyOrders();
+    setNav(n => ({ page: next, stack: [...n.stack, n.page] }));
+  };
   const backPage = () => setNav(n => (
     n.stack.length ? { page: n.stack[n.stack.length - 1], stack: n.stack.slice(0, -1) } : n
   ));
@@ -392,7 +397,14 @@ export default function App() {
         }
       }
     } catch (e) {
-      // без авторизации показываем пустой список
+      if (e?.status === 401) {
+        // Токен протух или аккаунт больше не существует: сбрасываем его,
+        // чтобы увидеть экран входа, а не вечный пустой список
+        localStorage.removeItem("token");
+        window.location.reload();
+        return;
+      }
+      // прочие ошибки — список остаётся пустым
     }
   }
 
@@ -628,7 +640,7 @@ export default function App() {
   // Телефон приходит из MAX по запросу контакта. Если в профиле его нет
   // (старый вход, номер не подтверждали) — запрашиваем ещё раз.
   const contactAsked = React.useRef(false);
-  async function syncContact(reload) {
+  async function syncContact() {
     if (contactAsked.current) return;
     const webApp = window.WebApp || window.Max?.WebApp || window.Max;
     if (!webApp || typeof webApp.requestContact !== "function") return;
@@ -649,7 +661,17 @@ export default function App() {
           contact
         })
       });
-      if (res.ok) reload?.();
+      if (res.ok) {
+        // Новый токен ОБЯЗАТЕЛЬНО сохраняем: раньше он терялся, приложение
+        // вечно ходило со старым «мёртвым» токеном — заказы пустовали,
+        // и перелогин не помогал. Перезапуск, чтобы список подхватил токен.
+        try {
+          const data = await res.json();
+          if (data.token) localStorage.setItem("token", data.token);
+        } catch {}
+        window.location.reload();
+        return;
+      }
     } catch (e) {
       // пользователь мог отказаться — тогда выходим на экран входа
       localStorage.removeItem("token");
@@ -659,7 +681,7 @@ export default function App() {
 
   useEffect(() => {
     if (summary && !summary.phone) {
-      syncContact(summaryData.reload);
+      syncContact();
     }
   }, [summary?.phone, summary?.id]);
 

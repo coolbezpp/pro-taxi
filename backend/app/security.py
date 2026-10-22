@@ -95,6 +95,7 @@ def get_admin(admin_session: str | None = Cookie(default=None)):
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db=Depends(get_db),
 ):
     if not credentials:
         raise HTTPException(
@@ -113,6 +114,26 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Недействительный токен",
         )
+
+    # Токен может указывать на удалённый/не созданный аккаунт: раньше такие
+    # сессии получали 200 с пустым списком заказов, и миниапп вечно показывал
+    # «Заказов пока нет» без возможности перелогиниться. Теперь — честный 401,
+    # фронт сбрасывает токен и показывает экран входа.
+    if payload.get("role") == "client":
+        from .models import User  # локальный импорт: избегаем цикла
+
+        try:
+            user_id = int(payload.get("sub"))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Сессия истекла — войдите заново",
+            )
+        if not db.query(User).get(user_id):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Сессия истекла — войдите заново",
+            )
 
     return {
         "id": payload.get("sub"),

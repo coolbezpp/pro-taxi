@@ -275,6 +275,13 @@ def auth_max_miniapp(
         )
         db.add(client)
         db.commit()
+    elif not client.phone:
+        # Старая запись без номера: summary.phone пустел, миниапп снова и снова
+        # спрашивал контакт и перезапускался — дописываем номер сейчас же
+        client.phone = user.phone
+        if not client.name:
+            client.name = user.phone
+        db.commit()
 
     return {
         "token": create_token(user.id, user.role),

@@ -113,7 +113,14 @@ export default function TrackMap({ from, to, driver, t, height = 240 }) {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || !driver) return;
-    if (driver.lat == null || driver.lon == null) return;
+    if (driver.lat == null || driver.lon == null) {
+      // Позиция скрыта (приватность/офлайн) — убираем маркер, если был
+      if (markers.current.driver) {
+        markers.current.driver.remove();
+        delete markers.current.driver;
+      }
+      return;
+    }
     if (!markers.current.driver) {
       const el = document.createElement("div");
       Object.assign(el.style, {

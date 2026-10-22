@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import Client, Executor, Order, OrderMessage, User
+from ..models import Client, Executor, Order, OrderEvent, OrderMessage, User
 from ..security import bearer_scheme
 
 router = APIRouter(prefix="/api", tags=["tracking"])
@@ -68,6 +68,68 @@ def _require_participant(db: Session, order, payload: dict) -> str:
     raise HTTPException(status_code=403, detail="Это не ваш заказ")
 
 
+def _as_naive_utc(dt):
+    """Хранилище — naive UTC; приводим tz-aware значения (scheduled_at из ISO)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _assignment_time(db: Session, order):
+    """Момент назначения исполнителя: событие assigned/accepted, иначе создание."""
+    row = (
+        db.query(OrderEvent)
+        .filter(
+            OrderEvent.order_id == order.id,
+            OrderEvent.event.in_(["assigned", "accepted"]),
+        )
+        .order_by(OrderEvent.id.desc())
+        .first()
+    )
+    moment = _as_naive_utc(row.created_at) if row else None
+    return moment or _as_naive_utc(order.created_at)
+
+
+def _location_visible_to_client(db: Session, order) -> bool:
+    """Приватность позиции исполнителя для роли client.
+
+    - «master»: локация не показывается никогда;
+    - «cargo» и межгород (tariff intercity): только за 10 минут до начала
+      выполнения; для заказа без расписания отсчёт идёт от момента назначения
+      (исполнитель принимает заказ — раньше клиент его не видит);
+    - обычное такси: без изменений (всегда видно);
+    - завершённый/отменённый заказ в отложенных сервисах больше не показывает
+      актуальную позицию (иначе клиент «следит» за исполнителем после работы).
+    """
+    service = (order.service or "taxi").lower()
+    if service == "master":
+        return False
+
+    tariff = (order.tariff_code or "").lower()
+    delayed = service == "cargo" or "intercity" in tariff or "межгород" in tariff
+    if not delayed:
+        return True
+    if order.status in ("completed", "cancelled"):
+        return False
+
+    now = datetime.utcnow()
+    assigned = _assignment_time(db, order)
+    scheduled = _as_naive_utc(order.scheduled_at)
+
+    # Заказ с расписанием (вперёд от момента назначения) — окно от scheduled_at.
+    if scheduled is not None and (assigned is None or scheduled > assigned):
+        if now >= scheduled - timedelta(minutes=10):
+            return True
+        return False
+
+    # Немедленный заказ: первые 10 минут после назначения позиция скрыта.
+    if assigned is None:
+        return False
+    return now >= assigned + timedelta(minutes=10)
+
+
 @router.post("/executors/{executor_id}/position")
 def update_position(
     executor_id: int,
@@ -108,7 +170,7 @@ def track_order(
         raise HTTPException(404, "Заказ не найден")
 
     payload = _decode(credentials)
-    _require_participant(db, order, payload)
+    role = _require_participant(db, order, payload)
 
     driver = None
     if order.driver_id:
@@ -123,6 +185,12 @@ def track_order(
                 "lon": executor.last_lon,
                 "updated_at": executor.last_seen_at.isoformat() if executor.last_seen_at else None,
             }
+            # Приватность: клиент видит позицию только по правилам сервиса
+            # (мастер — никогда; cargo/межгород — за 10 минут до начала).
+            if role == "client" and not _location_visible_to_client(db, order):
+                driver["lat"] = None
+                driver["lon"] = None
+                driver["updated_at"] = None
 
     client_name = None
     if order.passenger_id:
