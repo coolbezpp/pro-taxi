@@ -11,10 +11,11 @@ services:
     stop_grace_period: 300s
     volumes:
       - nominatim-data:/var/lib/postgresql/16/main
-      - ./nominatim-flatnode:/nominatim/flatnode
-      - ./data:/nominatim/data:ro
+      # Только сам PBF и без read-only: entrypoint делает chown /nominatim
+      # и не должен видеть чужие файлы (osrm-сборку) под своим деревом.
+      - ./data/kkr.osm.pbf:/input/kkr.osm.pbf
     environment:
-      PBF_PATH: /nominatim/data/kkr.osm.pbf
+      PBF_PATH: /input/kkr.osm.pbf
       THREADS: "1"
       GUNICORN_WORKERS: "1"
       IMPORT_STYLE: "address"          # адреса до дома; POI не тянем — экономим память и диск
@@ -26,6 +27,9 @@ services:
       POSTGRES_WORK_MEM: "16MB"
       POSTGRES_EFFECTIVE_CACHE_SIZE: "1GB"
       POSTGRES_MAX_CONNECTIONS: "30"
+    # ВАЖНО: не монтировать ./nominatim-flatnode:/nominatim/flatnode!
+    # entrypoint mediagis включает flatnode, если видит директорию /nominatim/flatnode,
+    # а flatnode.file выделяет 14 ГБ (масштаб всего мира) — на диске 30 ГБ это ENOSPC.
     shm_size: 512mb
     mem_limit: 1400m                   # сервер 2 ГБ — держим в рамках, остальное своп
     ports:

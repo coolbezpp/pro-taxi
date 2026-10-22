@@ -1406,6 +1406,35 @@ const STATUS_RU = {
   cancelled: "Отменён",
 };
 
+// Подпись сервиса в карточке заказа (для ролей кроме такси)
+const SERVICE_LABELS = {
+  courier: "Курьерская доставка",
+  cargo: "Грузоперевозка",
+  master: "Заказ мастера",
+};
+
+// Детали входящего заказа: время подачи, грузчики, услуга мастера, комментарий
+function orderDetails(o) {
+  const lines = [];
+  const meta = o?.meta || {};
+  if (o?.scheduled_at) {
+    const d = new Date(o.scheduled_at);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    lines.push(`Подача: ${d.getDate()}.${String(d.getMonth() + 1).padStart(2, "0")} ${hh}:${mm}`);
+  }
+  if (Number(meta.loaders || 0) > 0) {
+    lines.push(`Грузчики: ${meta.loaders} на ${meta.loader_hours || 1} ч`);
+  }
+  if (meta.master_title) {
+    lines.push(`Услуга: ${meta.master_title}`);
+  }
+  if (meta.comment) {
+    lines.push(`«${meta.comment}»`);
+  }
+  return lines;
+}
+
 const THEME_OPTIONS = [
   { id: "light", icon: "sun", title: "Светлая" },
   { id: "dark", icon: "moon", title: "Тёмная" },
@@ -2002,6 +2031,14 @@ export default function App() {
                   <p style={{ margin: "8px 0", color: t.text, fontWeight: 650 }}>
                     {incoming.from_address} → {incoming.to_address}
                   </p>
+                  {incoming.service && incoming.service !== "taxi" && (
+                    <p style={{ margin: "0 0 2px", color: t.sub, fontSize: 12 }}>
+                      {SERVICE_LABELS[incoming.service] || incoming.service}
+                    </p>
+                  )}
+                  {orderDetails(incoming).map((line, i) => (
+                    <p key={i} style={{ margin: "2px 0", color: t.sub, fontSize: 13 }}>{line}</p>
+                  ))}
                   <p style={{ fontSize: 22, fontWeight: 900, color: t.text, margin: "0 0 10px", letterSpacing: -0.5 }}>
                     {incoming.total_price} ₽
                   </p>
@@ -2035,6 +2072,12 @@ export default function App() {
                     <strong style={{ color: t.text }}>{o.total_price} ₽</strong>
                   </div>
                   <p style={{ margin: "0 0 4px", color: t.text }}>{o.from_address} → {o.to_address}</p>
+                  {o.service && o.service !== "taxi" && (
+                    <p style={{ margin: "0 0 2px", color: t.sub, fontSize: 12 }}>{SERVICE_LABELS[o.service] || o.service}</p>
+                  )}
+                  {orderDetails(o).map((line, i) => (
+                    <p key={i} style={{ margin: "1px 0", color: t.sub, fontSize: 12 }}>{line}</p>
+                  ))}
                   <p style={{ margin: 0, color: t.sub, fontSize: 12 }}>{STATUS_RU[o.status] || o.status}</p>
                 </div>
               ))}

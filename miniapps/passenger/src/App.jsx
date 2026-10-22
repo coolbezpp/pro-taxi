@@ -517,24 +517,17 @@ export default function App() {
           tariff_code: "cargo",
           from_address: cargoFrom,
           to_address: cargoTo,
-          from_lat: 44.8908,
-          from_lon: 37.3164,
-          to_lat: 44.8908,
-          to_lon: 37.3164,
           distance_km: Number(cargoDistance),
-          city_km: Number(cargoDistance),
-          out_km: 0,
           scheduled_at: scheduled.toISOString(),
           meta: {
             loaders: Number(loaders),
-            loader_hours: Number(loaderHours),
-            loader_hour_price: LOADER_HOUR_PRICE
+            loader_hours: Number(loaderHours)
           }
         }
       });
       setOrder(res);
       setOrders([res, ...orders]);
-      goPage("orders");
+      goPage("search");
     } catch (e) {
       setError(e.message);
     }
@@ -574,7 +567,7 @@ export default function App() {
       });
       setOrder(res);
       setOrders([res, ...orders]);
-      goPage("orders");
+      goPage("search");
     } catch (e) {
       setError(e.message);
     }

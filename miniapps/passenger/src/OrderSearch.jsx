@@ -75,8 +75,10 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
 
   const status = order?.status || "created";
   const driver = track?.driver;
-  const from = track ? { lat: track.from_lat, lon: track.from_lon } : null;
-  const to = track ? { lat: track.to_lat, lon: track.to_lon } : null;
+  // Координаты могут отсутствовать (например, грузовой заказ без карты) —
+  // тогда не отдаём в карту точку вовсе, чтобы не рисовать маркеры с null
+  const from = track && track.from_lat != null ? { lat: track.from_lat, lon: track.from_lon } : null;
+  const to = track && track.to_lat != null ? { lat: track.to_lat, lon: track.to_lon } : null;
 
   return (
     <div style={{ padding: "14px 16px 30px" }}>

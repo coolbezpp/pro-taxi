@@ -305,15 +305,31 @@ def price(data: PriceIn, db: Session=Depends(get_db)):
     return {"total":total,"commission_percent":float(db.query(models.Setting).get("commission_percent").value if db.query(models.Setting).get("commission_percent") else 15)}
 
 # --- orders ---
+# Соответствие сервиса заказа роли исполнителя, назначаемой на него
+SERVICE_ROLE = {
+    "taxi": "driver",
+    "courier": "courier",
+    "cargo": "cargo",
+    "master": "master",
+}
+# Тариф грузоперевозок: считаем на бэкенде, цену клиента не принимаем
+CARGO_BASE_PRICE = 700.0
+CARGO_KM_PRICE = 35.0
+CARGO_LOADER_HOUR_PRICE = 500.0
+CARGO_LOADERS_MAX = 4
+CARGO_LOADER_HOURS_MAX = 12
+
+
 class OrderIn(BaseModel):
-    passenger_id:int; tariff_code:str="standard"; from_address:str; to_address:str
-    from_lat:float; from_lon:float; to_lat:float; to_lon:float
+    passenger_id:int; tariff_code:str="standard"; service:str="taxi"; from_address:str; to_address:str
+    from_lat:float|None=None; from_lon:float|None=None; to_lat:float|None=None; to_lon:float|None=None
     distance_km:float; city_km:float=0; out_km:float=0
     children:int=0; animals:bool=False; child_seats:int=0
     manual_increase:float=0; scheduled_at:datetime|None=None
     wheelchair: bool = False
     own_child_seat: bool = False
     comment: str | None = None
+    meta: dict | None = None
 def _passenger_client(db: Session, user: dict):
     """Реальный клиент из токена (не наказываем чужим passenger_id из тела запроса)."""
     max_id = _token_max_id(db, user) if user else None
@@ -329,30 +345,46 @@ def _passenger_client(db: Session, user: dict):
 
 @app.post("/api/orders")
 def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_current_user)):
-    t=db.query(models.Tariff).filter_by(code=data.tariff_code,active=True).first()
-    if not t: raise HTTPException(400,"tariff unavailable")
-    if data.tariff_code=="intercity":
-        pass  # проверка населённого пункта выполняется через /settlements/check
-    if data.tariff_code=="standard":
-        base=pricing.calc_standard(data.distance_km,data.city_km,data.out_km,t,data.children,data.animals,data.child_seats,0)
-    else:
-        base=pricing.calc_intercity(data.distance_km,t,data.children,data.animals,data.child_seats,0)
-    # Надбавка клиента ограничена 50% от расчётной цены — защита от «фейковых» заказов
-    max_increase=round(base*0.5,2)
-    manual_increase=min(max(0.0,float(data.manual_increase or 0)),max_increase)
-    if data.tariff_code=="standard":
-        total=pricing.calc_standard(data.distance_km,data.city_km,data.out_km,t,data.children,data.animals,data.child_seats,manual_increase)
-    else:
-        total=pricing.calc_intercity(data.distance_km,t,data.children,data.animals,data.child_seats,manual_increase)
-    cp=float(db.query(models.Setting).get("commission_percent").value) if db.query(models.Setting).get("commission_percent") else 15
+    service = (data.service or "taxi").strip().lower()
+    if service not in ("taxi", "cargo"):
+        raise HTTPException(400, "Сервис недоступен")
     client = _passenger_client(db, user)
-    meta={"wheelchair": data.wheelchair, "own_child_seat": data.own_child_seat}
-    if (data.comment or "").strip():
-        meta["comment"]=data.comment.strip()[:500]
-    o=models.Order(passenger_id=client.id if client else data.passenger_id,tariff_code=data.tariff_code,from_address=data.from_address,to_address=data.to_address,
+    cp=float(db.query(models.Setting).get("commission_percent").value) if db.query(models.Setting).get("commission_percent") else 15
+
+    if service == "cargo":
+        # Цена грузоперевозки считается сервером: 700 + 35/км + грузчики×часы×500
+        meta_in = data.meta or {}
+        loaders = max(0, min(int(meta_in.get("loaders") or 0), CARGO_LOADERS_MAX))
+        loader_hours = max(0, min(int(meta_in.get("loader_hours") or 0), CARGO_LOADER_HOURS_MAX))
+        base = CARGO_BASE_PRICE + float(data.distance_km or 0) * CARGO_KM_PRICE + loaders * loader_hours * CARGO_LOADER_HOUR_PRICE
+        total = round(base, 2)
+        tariff_code = "cargo"
+        meta = {"loaders": loaders, "loader_hours": loader_hours}
+    else:
+        t=db.query(models.Tariff).filter_by(code=data.tariff_code,active=True).first()
+        if not t: raise HTTPException(400,"tariff unavailable")
+        if data.tariff_code=="intercity":
+            pass  # проверка населённого пункта выполняется через /settlements/check
+        if data.tariff_code=="standard":
+            base=pricing.calc_standard(data.distance_km,data.city_km,data.out_km,t,data.children,data.animals,data.child_seats,0)
+        else:
+            base=pricing.calc_intercity(data.distance_km,t,data.children,data.animals,data.child_seats,0)
+        # Надбавка клиента ограничена 50% от расчётной цены — защита от «фейковых» заказов
+        max_increase=round(base*0.5,2)
+        manual_increase=min(max(0.0,float(data.manual_increase or 0)),max_increase)
+        if data.tariff_code=="standard":
+            total=pricing.calc_standard(data.distance_km,data.city_km,data.out_km,t,data.children,data.animals,data.child_seats,manual_increase)
+        else:
+            total=pricing.calc_intercity(data.distance_km,t,data.children,data.animals,data.child_seats,manual_increase)
+        tariff_code = data.tariff_code
+        meta={"wheelchair": data.wheelchair, "own_child_seat": data.own_child_seat}
+        if (data.comment or "").strip():
+            meta["comment"]=data.comment.strip()[:500]
+
+    o=models.Order(passenger_id=client.id if client else data.passenger_id,service=service,tariff_code=tariff_code,from_address=data.from_address,to_address=data.to_address,
         from_lat=data.from_lat,from_lon=data.from_lon,to_lat=data.to_lat,to_lon=data.to_lon,distance_km=data.distance_km,
         city_distance_km=data.city_km,out_city_distance_km=data.out_km,base_price=base,options_price=0,
-        manual_increase=manual_increase,total_price=total,commission_percent=cp,
+        manual_increase=manual_increase if service != "cargo" else 0,total_price=total,commission_percent=cp,
         commission_amount=pricing.commission(total,cp),children=data.children,animals=data.animals,child_seats=data.child_seats,
         scheduled_at=data.scheduled_at,status="created",meta=meta)
     db.add(o)
@@ -521,7 +553,28 @@ def available_orders(executor_id: int, role: str, db: Session = Depends(get_db))
         models.Order.service == service
     ).order_by(models.Order.scheduled_at.asc().nullslast(), models.Order.id.asc()).all()
 
-    return orders
+    result = []
+    for o in orders:
+        meta = dict(o.meta or {})
+        if (o.service or "") == "master":
+            ms_id = meta.get("master_service_id")
+            if ms_id:
+                ms = db.query(models.MasterService).get(ms_id)
+                if ms:
+                    meta.setdefault("master_title", ms.title)
+        result.append({
+            "id": o.id,
+            "service": o.service,
+            "tariff_code": o.tariff_code,
+            "from_address": o.from_address,
+            "to_address": o.to_address,
+            "distance_km": o.distance_km,
+            "total_price": o.total_price,
+            "scheduled_at": o.scheduled_at,
+            "created_at": o.created_at,
+            "meta": meta,
+        })
+    return result
 
 @app.post("/api/orders/{order_id}/assign/{driver_id}")
 def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
@@ -550,7 +603,8 @@ def assign(order_id:int, driver_id:int, db: Session=Depends(get_db)):
     executor.skip_streak = 0
 
     roles = [r.role for r in db.query(models.ExecutorRole).filter_by(executor_id=driver_id).all()]
-    required_role = "driver"
+    # Роль выводится из сервиса заказа: грузовой заказ не должен требовать роль таксиста
+    required_role = SERVICE_ROLE.get(o.service or "taxi", "driver")
 
     if required_role not in roles:
         raise HTTPException(403, "У исполнителя нет роли для этого заказа")
