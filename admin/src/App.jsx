@@ -9,25 +9,34 @@ const PURPLE = "#6545ed";
 function RatingBattery({ value = 100, w = 44 }) {
   const v = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
   const color = v >= 80 ? "#17b26a" : v >= 60 ? "#f5b400" : v >= 40 ? "#f97316" : "#ff3b5d";
-  const h = Math.round(w * 0.5);
+  const h = Math.max(16, Math.round(w * 0.45));
+  const fs = Math.max(9, Math.round(h * 0.5));
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       <span style={{ display: "inline-flex", alignItems: "center" }}>
+        {/* Процент внутри корпуса: заряд заливает батарею слева,
+            цифра поверх — белая с тенью, читается на любом заряде */}
         <span style={{
-          width: w, height: h, borderRadius: 4, padding: 2, boxSizing: "border-box",
-          border: "1.5px solid rgba(128,132,150,.55)",
+          position: "relative", width: w, height: h, borderRadius: 4,
+          boxSizing: "border-box", border: "1.5px solid rgba(128,132,150,.55)",
+          background: "#4b4f63", overflow: "hidden",
         }}>
           <span style={{
-            display: "block", height: "100%", width: `${v}%`,
-            background: color, borderRadius: 2, transition: "width .3s",
+            position: "absolute", left: 0, top: 0, bottom: 0,
+            width: `${v}%`, background: color, transition: "width .3s",
           }} />
+          <span style={{
+            position: "absolute", inset: 0, display: "flex",
+            alignItems: "center", justifyContent: "center",
+            fontSize: fs, fontWeight: 850, lineHeight: 1,
+            color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,.55)",
+          }}>{v}%</span>
         </span>
         <span style={{
           width: 3, height: Math.round(h * 0.42), borderRadius: "0 2px 2px 0",
           background: "rgba(128,132,150,.55)", marginLeft: 1,
         }} />
       </span>
-      <strong style={{ fontSize: 12.5, color }}>{v}%</strong>
     </span>
   );
 }
