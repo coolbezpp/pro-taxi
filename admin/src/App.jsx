@@ -307,6 +307,7 @@ function Icon({ name, size = 20, style }) {
 }
 
 const MENU = [
+  { id: "dashboard", icon: "home", title: "Дашборд" },
   { id: "analytics", icon: "chart", title: "Статистика" },
   { id: "orders", icon: "orders", title: "Заказы", count: "orders" },
   { id: "clients", icon: "person", title: "Клиенты", count: "clients" },
@@ -326,7 +327,9 @@ const PHOTO_KINDS = {
   plate: "Фото номера",
 };
 
-const PAGE_INFO = {  analytics: ["Статистика сервиса", "Ключевые показатели и динамика заказов"],
+const PAGE_INFO = {
+  dashboard: ["Дашборд сервиса", "Основные показатели, районы края, роли и проблемы"],
+  analytics: ["Статистика сервиса", "Ключевые показатели и динамика заказов"],
   orders: ["Заказы", "Новые сверху, фильтры по статусу и услуге"],
   clients: ["Клиенты", "База клиентов, балансы и контакты"],
   executors: ["Исполнители", "Такси, курьеры, мастера и их балансы"],
@@ -362,6 +365,20 @@ const SERVICE_LABELS = {
   courier: "Курьер",
   cargo: "Грузоперевозки",
   master: "Мастера",
+};
+
+const ROLE_LABELS = {
+  driver: "Исполнитель (такси)",
+  courier: "Курьер",
+  cargo: "Грузоперевозчик",
+  master: "Мастер",
+  car_owner: "Арендодатель авто",
+  flat_owner: "Арендодатель жилья",
+};
+
+const SELECT_STYLE = {
+  padding: "9px 12px", borderRadius: 10, border: "1px solid #e2dff0",
+  fontSize: 14, fontFamily: "inherit", background: "#fff",
 };
 
 export default function App() {
@@ -408,6 +425,11 @@ export default function App() {
   const [adFile, setAdFile] = useState(null);
   const [adMsg, setAdMsg] = useState("");
   const [analytics, setAnalytics] = useState(null);
+  // Дашборд: фильтры (период, роль, район КК) и данные сводки
+  const [dash, setDash] = useState(null);
+  const [dashPeriod, setDashPeriod] = useState(30);
+  const [dashRole, setDashRole] = useState("");
+  const [dashDistrict, setDashDistrict] = useState("");
   const [needLogin, setNeedLogin] = useState(false);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -416,6 +438,11 @@ export default function App() {
   useEffect(() => {
     checkAuth();
   }, []);
+
+  // Дашборд грузим при открытии вкладки и при смене любого фильтра
+  useEffect(() => {
+    if (tab === "dashboard" && !needLogin) loadDashboard();
+  }, [tab, dashPeriod, dashRole, dashDistrict, needLogin]);
 
   // Живые часы в шапке — как в админке конкурента
   useEffect(() => {
@@ -730,6 +757,21 @@ export default function App() {
     });
     const data = await res.json().catch(() => ({}));
     setAnalytics(data);
+  }
+
+  async function loadDashboard() {
+    const q = new URLSearchParams({ period: String(dashPeriod) });
+    if (dashRole) q.set("role", dashRole);
+    if (dashDistrict) q.set("district", dashDistrict);
+    try {
+      const res = await fetch(`${API}/admin/dashboard?${q}`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      setDash(data);
+    } catch (e) {
+      setDash({ totals: null });
+    }
   }
 
   async function loadRentals() {
@@ -1613,6 +1655,291 @@ export default function App() {
 
             {rentals.length === 0 && (
               <div style={{ ...card, textAlign: "center", color: "#77748a" }}>Объявлений нет</div>
+            )}
+          </div>
+        )}
+
+        {tab === "dashboard" && (
+          <div>
+            {/* Фильтры: период, роль, район Краснодарского края */}
+            <div style={{
+              ...card, display: "flex", gap: 10, flexWrap: "wrap",
+              alignItems: "center", marginBottom: 14,
+            }}>
+              <span style={{ fontWeight: 800, fontSize: 14 }}>Фильтры</span>
+              <select
+                value={dashPeriod}
+                onChange={e => setDashPeriod(Number(e.target.value))}
+                style={SELECT_STYLE}
+              >
+                <option value={7}>7 дней</option>
+                <option value={30}>30 дней</option>
+                <option value={0}>Всё время</option>
+              </select>
+              <select
+                value={dashRole}
+                onChange={e => setDashRole(e.target.value)}
+                style={SELECT_STYLE}
+              >
+                <option value="">Все роли</option>
+                {(dash?.roles || []).map(r => (
+                  <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>
+                ))}
+              </select>
+              <select
+                value={dashDistrict}
+                onChange={e => setDashDistrict(e.target.value)}
+                style={SELECT_STYLE}
+              >
+                <option value="">Все районы КК</option>
+                {(dash?.districts || []).map(d => (
+                  <option key={d} value={d}>
+                    {d === "__none__" ? "Не определён" : d}
+                  </option>
+                ))}
+              </select>
+              {(dashRole || dashDistrict) && (
+                <button
+                  onClick={() => { setDashRole(""); setDashDistrict(""); }}
+                  style={{
+                    padding: "9px 12px", borderRadius: 10, border: 0, cursor: "pointer",
+                    background: "#f2f1f7", fontSize: 13.5, fontFamily: "inherit",
+                  }}
+                >Сбросить</button>
+              )}
+              {!dash && (
+                <span style={{ color: "#77748a", fontSize: 13 }}>Загрузка…</span>
+              )}
+            </div>
+
+            {dash?.totals && (
+              <>
+                {/* Ключевые показатели */}
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                  gap: 12, marginBottom: 14,
+                }}>
+                  {[
+                    ["Заказов", dash.totals.orders, ""],
+                    ["Завершено", dash.totals.completed, ""],
+                    ["Отменено", dash.totals.cancelled, ""],
+                    ["В работе", dash.totals.active, ""],
+                    ["Оборот", dash.totals.revenue, "₽"],
+                    ["Комиссия", dash.totals.commission, "₽"],
+                    ["Средний чек", dash.totals.avg_check, "₽"],
+                    ["Клиентов", dash.totals.clients, ""],
+                    ["Исполнителей", dash.totals.executors, ""],
+                    ["На линии", dash.totals.online, ""],
+                  ].map(([label, value, suffix]) => (
+                    <div key={label} style={{
+                      background: "#fff", border: "1px solid #ececf2",
+                      borderRadius: 16, padding: 16,
+                      boxShadow: "0 1px 3px rgba(20,16,50,.05)",
+                    }}>
+                      <div style={{ fontSize: 24, fontWeight: 850, color: PURPLE }}>
+                        {value}{suffix ? ` ${suffix}` : ""}
+                      </div>
+                      <div style={{ fontSize: 13, color: "#77748a", marginTop: 4 }}>
+                        {label}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Динамика по дням */}
+                {(dash.by_day || []).length > 0 && (
+                  <div style={{ ...card, marginBottom: 14 }}>
+                    <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>Заказы по дням</h3>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {(() => {
+                        const max = Math.max(...dash.by_day.map(d => d.orders), 1);
+                        return dash.by_day.map(d => (
+                          <div key={d.day} style={{
+                            display: "flex", alignItems: "center", gap: 10, fontSize: 13,
+                          }}>
+                            <span style={{ width: 44, color: "#55526a" }}>{d.day}</span>
+                            <div style={{ flex: 1, height: 10, background: "#f0f1f5", borderRadius: 999 }}>
+                              <div style={{
+                                width: `${(d.orders / max) * 100}%`, height: "100%",
+                                background: PURPLE, borderRadius: 999,
+                              }} />
+                            </div>
+                            <span style={{ width: 30, textAlign: "right", fontWeight: 700 }}>
+                              {d.orders}
+                            </span>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                {/* Районы Краснодарского края */}
+                <div style={{ ...card, marginBottom: 14 }}>
+                  <h3 style={{ margin: "0 0 4px", fontSize: 17 }}>Районы Краснодарского края</h3>
+                  <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "#77748a" }}>
+                    Клик по строке — выбор района для всего дашборда.
+                  </p>
+                  {(dash.by_district || []).length === 0 && (
+                    <p style={{ margin: 0, fontSize: 13, color: "#77748a" }}>
+                      Заказов за период нет
+                    </p>
+                  )}
+                  {(dash.by_district || []).map(d => {
+                    const isNone = d.district === "Не определён";
+                    const selected = Boolean(dash.district)
+                      && ((isNone && dash.district === "__none__")
+                        || (!isNone && dash.district === d.district));
+                    return (
+                      <div
+                        key={d.district}
+                        onClick={() => setDashDistrict(
+                          selected ? "" : (isNone ? "__none__" : d.district)
+                        )}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          padding: "8px 10px", borderRadius: 10, cursor: "pointer",
+                          background: selected ? "#eee9ff" : "transparent",
+                          fontSize: 13.5, borderBottom: "1px solid #f5f4f9",
+                        }}
+                      >
+                        <span style={{ flex: 1, fontWeight: selected ? 800 : 600 }}>
+                          {d.district}
+                        </span>
+                        <span style={{ width: 70, textAlign: "right", color: "#55525f" }}>
+                          {d.orders} зак.
+                        </span>
+                        <span style={{ width: 80, textAlign: "right", color: "#177e46" }}>
+                          {d.completed} зав.
+                        </span>
+                        <span style={{ width: 90, textAlign: "right", fontWeight: 750 }}>
+                          {d.revenue} ₽
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Роли: клик — фильтр по роли */}
+                <div style={{ ...card, marginBottom: 14 }}>
+                  <h3 style={{ margin: "0 0 4px", fontSize: 17 }}>Роли</h3>
+                  <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "#77748a" }}>
+                    Клик по строке — фильтр дашборда по роли.
+                  </p>
+                  <div style={{
+                    display: "flex", gap: 10, fontSize: 11, color: "#9a97ab",
+                    fontWeight: 700, padding: "0 10px 6px",
+                  }}>
+                    <span style={{ flex: 1 }}>Роль</span>
+                    <span style={{ width: 100, textAlign: "right" }}>Исполнителей</span>
+                    <span style={{ width: 70, textAlign: "right" }}>Онлайн</span>
+                    <span style={{ width: 70, textAlign: "right" }}>Заказов</span>
+                    <span style={{ width: 60, textAlign: "right" }}>Блок.</span>
+                    <span style={{ width: 60, textAlign: "right" }}>Отстр.</span>
+                  </div>
+                  {(dash.by_role || []).map(r => {
+                    const selected = dashRole === r.role;
+                    return (
+                      <div
+                        key={r.role}
+                        onClick={() => setDashRole(selected ? "" : r.role)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          padding: "8px 10px", borderRadius: 10, cursor: "pointer",
+                          background: selected ? "#eee9ff" : "transparent",
+                          fontSize: 13.5, borderBottom: "1px solid #f5f4f9",
+                        }}
+                      >
+                        <span style={{ flex: 1, fontWeight: selected ? 800 : 600 }}>
+                          {ROLE_LABELS[r.role] || r.role}
+                        </span>
+                        <span style={{ width: 100, textAlign: "right" }}>{r.executors}</span>
+                        <span style={{ width: 70, textAlign: "right", color: "#177e46" }}>
+                          {r.online}
+                        </span>
+                        <span style={{ width: 70, textAlign: "right" }}>{r.orders}</span>
+                        <span style={{
+                          width: 60, textAlign: "right",
+                          color: r.blocked ? "#d92b45" : "#c9c6d6", fontWeight: 700,
+                        }}>{r.blocked}</span>
+                        <span style={{
+                          width: 60, textAlign: "right",
+                          color: r.suspended ? "#d92b45" : "#c9c6d6", fontWeight: 700,
+                        }}>{r.suspended}</span>
+                      </div>
+                    );
+                  })}
+                  {(dash.by_role || []).length === 0 && (
+                    <p style={{ margin: 0, fontSize: 13, color: "#77748a" }}>Исполнителей нет</p>
+                  )}
+                </div>
+
+                {/* Заблокированные исполнители */}
+                <div style={{ ...card, marginBottom: 14 }}>
+                  <h3 style={{ margin: "0 0 10px", fontSize: 17 }}>
+                    Заблокированные исполнители
+                  </h3>
+                  {(dash.blocked || []).length === 0 ? (
+                    <p style={{ margin: 0, fontSize: 13, color: "#77748a" }}>
+                      В этой выборке заблокированных нет
+                    </p>
+                  ) : dash.blocked.map(e => (
+                    <div key={e.id} style={{
+                      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                      padding: "8px 10px", borderBottom: "1px solid #f5f4f9", fontSize: 13.5,
+                    }}>
+                      <span style={{ flex: 1, minWidth: 140, fontWeight: 700 }}>
+                        {e.name || `Исполнитель ${e.id}`}
+                      </span>
+                      <span style={{ color: "#77748a" }}>{e.phone || "—"}</span>
+                      <RatingBattery value={e.rating_percent} w={44} />
+                      <span style={{
+                        padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 800,
+                        background: "#ffe9ec", color: "#d92b45",
+                      }}>отклонён</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Отстранённые от заказов */}
+                <div style={card}>
+                  <h3 style={{ margin: "0 0 10px", fontSize: 17 }}>
+                    Отстранённые от заказов
+                  </h3>
+                  {(dash.suspended || []).length === 0 ? (
+                    <p style={{ margin: 0, fontSize: 13, color: "#77748a" }}>
+                      Отстранений нет — все могут брать заказы
+                    </p>
+                  ) : dash.suspended.map(e => (
+                    <div key={e.id} style={{
+                      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                      padding: "8px 10px", borderBottom: "1px solid #f5f4f9", fontSize: 13.5,
+                    }}>
+                      <span style={{ flex: 1, minWidth: 140, fontWeight: 700 }}>
+                        {e.name || `Исполнитель ${e.id}`}
+                      </span>
+                      <span style={{ color: "#77748a" }}>{e.phone || "—"}</span>
+                      <RatingBattery value={e.rating_percent} w={44} />
+                      <span style={{ color: "#d92b45", fontWeight: 750, fontSize: 12.5 }}>
+                        до {e.ends_at ? new Date(e.ends_at).toLocaleString("ru-RU") : "—"}
+                      </span>
+                      <span style={{
+                        padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 800,
+                        background: e.source === "auto" ? "#fff4e5" : "#eee9ff",
+                        color: e.source === "auto" ? "#b45309" : "#6545ed",
+                      }}>
+                        {e.source === "auto" ? "автоматически" : "вручную"}
+                      </span>
+                      {e.reason && (
+                        <span style={{ flexBasis: "100%", color: "#77748a", fontSize: 12 }}>
+                          {e.reason}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}

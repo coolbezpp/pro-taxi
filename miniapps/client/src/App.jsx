@@ -243,9 +243,20 @@ const SERVICES = [
   { id: "courier", icon: "courier", label: "Курьер", grad: "linear-gradient(135deg,#ffb347,#ff7a2f)", glow: "rgba(255,138,61,.45)" },
   { id: "cargo", icon: "truck", label: "Грузовое", grad: "linear-gradient(135deg,#2bd9a7,#0fb5ba)", glow: "rgba(27,192,178,.45)" },
   { id: "master", icon: "wrench", label: "Мастера", grad: "linear-gradient(135deg,#ff7a93,#f0326e)", glow: "rgba(245,63,120,.45)", badge: "NEW" },
+  { id: "tech_help", icon: "key", label: "Автотехпомощь", grad: "linear-gradient(135deg,#38bdf8,#0284c7)", glow: "rgba(14,165,233,.45)", badge: "NEW" },
   { id: "work", icon: "briefcase", label: "Работа", grad: "linear-gradient(135deg,#a78bfa,#6d4ef5)", glow: "rgba(120,96,246,.45)" },
   { id: "cars", icon: "key", label: "Авто", grad: "linear-gradient(135deg,#4fd1ff,#2296f3)", glow: "rgba(47,157,243,.45)" },
   { id: "flats", icon: "house", label: "Жильё", grad: "linear-gradient(135deg,#f482ff,#b13bfb)", glow: "rgba(186,74,251,.45)" },
+];
+
+// Услуги автотехпомощи: цена считается на сервере.
+// tow (эвакуация) — по тарифу грузоперевозок, sober_driver — 3× тариф такси.
+const TECH_HELP_SERVICES = [
+  { key: "jump_start",   title: "Прикурить авто",   price: 500,  desc: "Запуск двигателя от постороннего аккумулятора" },
+  { key: "tire_inflate", title: "Подкачать колесо", price: 250,  desc: "Подкачка спущенного колеса на месте" },
+  { key: "diagnostics",  title: "Диагностика",      price: 1000, desc: "Компьютерная диагностика неисправностей" },
+  { key: "tow",          title: "Эвакуация",        price: null, desc: "По тарифу грузоперевозок · только предзаказ" },
+  { key: "sober_driver", title: "Трезвый водитель", price: null, desc: "A→B по тройному тарифу такси, мин. 1000 ₽" },
 ];
 
 const STATUS_RU = {
@@ -348,6 +359,14 @@ export default function App() {
   const [masterAddress, setMasterAddress] = useState("");
   const [masterDate, setMasterDate] = useState("");
   const [masterTime, setMasterTime] = useState("");
+  // Автотехпомощь
+  const [techService, setTechService] = useState(null);
+  const [techAddress, setTechAddress] = useState("");
+  const [techTo, setTechTo] = useState("");
+  const [techDistance, setTechDistance] = useState("");
+  const [techDate, setTechDate] = useState("");
+  const [techTime, setTechTime] = useState("");
+  const [techComment, setTechComment] = useState("");
   const [error, setError] = useState("");
   const [city, setCity] = useState(localStorage.getItem("pro_city") || "Анапа");
   const [popular, setPopular] = useState(null);
@@ -575,6 +594,47 @@ export default function App() {
           from_address: masterAddress,
           to_address: "",
           scheduled_at: scheduled
+        }
+      });
+      setOrder(res);
+      setOrders([res, ...orders]);
+      goPage("search");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function createTechHelpOrder() {
+    try {
+      if (!techService || !techAddress) {
+        setError("Выберите услугу и укажите адрес (место положения авто)");
+        return;
+      }
+      const key = techService.key;
+      const needsAB = key === "sober_driver" || key === "tow";
+      if (needsAB && (!techTo || !Number(techDistance))) {
+        setError("Укажите назначение и расстояние A→B, км");
+        return;
+      }
+      if (key === "tow" && (!techDate || !techTime)) {
+        setError("Эвакуация доступна только как предзаказ — укажите дату и время");
+        return;
+      }
+      const scheduled = techDate && techTime
+        ? new Date(`${techDate}T${techTime}:00`).toISOString()
+        : null;
+      const res = await api("/orders", {
+        method: "POST",
+        body: {
+          client_id: 1,
+          service: "tech_help",
+          tariff_code: "tech_help",
+          from_address: techAddress,
+          to_address: needsAB ? techTo : "",
+          distance_km: needsAB ? Number(techDistance) : 0,
+          scheduled_at: scheduled,
+          comment: techComment.trim() || null,
+          meta: { service_key: key }
         }
       });
       setOrder(res);
@@ -878,6 +938,15 @@ export default function App() {
         }} />
       )}
 
+      {page === "tech_help" && (
+        <TechHelpPage s={s} t={t} p={{
+          techService, setTechService, techAddress, setTechAddress,
+          techTo, setTechTo, techDistance, setTechDistance,
+          techDate, setTechDate, techTime, setTechTime,
+          techComment, setTechComment, createTechHelpOrder
+        }} />
+      )}
+
       {page === "support" && (
         <div style={{ padding: "16px 16px 24px" }}>
           <div style={s.listGroup}>
@@ -902,7 +971,7 @@ export default function App() {
           city={city} onCity={() => goPage("city")} onSupport={() => goPage("support")} onInfo={() => goPage("info")} />
       )}
 
-      {["home", "orders", "favorites", "city", "taxi", "cargo", "master", "support", "info", "profile"].indexOf(page) < 0 && (
+      {["home", "orders", "favorites", "city", "taxi", "cargo", "master", "tech_help", "support", "info", "profile"].indexOf(page) < 0 && (
         <div style={{ padding: "16px 16px 24px" }}>
           <div style={s.listGroup}>
             <div style={{ padding: 20, textAlign: "center" }}>
@@ -1447,19 +1516,116 @@ function MasterPage({ s, t, p }) {
   );
 }
 
+function TechHelpPage({ s, t, p }) {
+  const key = p.techService?.key;
+  const needsAB = key === "sober_driver" || key === "tow";
+  const priceLabel = (x) => x.price != null
+    ? `${x.price} ₽`
+    : x.key === "tow" ? "по тарифу грузоперевозок" : "от 1000 ₽";
+  return (
+    <div style={{ padding: "18px 16px 24px" }}>
+      <h1 style={s.pageTitle}>Автотехпомощь</h1>
+      <div style={s.listGroup}>
+        <div style={{ padding: 16 }}>
+          <strong style={{ color: t.text, fontSize: 14 }}>Выбранная услуга</strong>
+          {p.techService ? (
+            <p style={{ margin: "6px 0", color: t.accent, fontWeight: 800 }}>
+              {p.techService.title} · {priceLabel(p.techService)}
+            </p>
+          ) : (
+            <p style={{ margin: "6px 0", color: t.sub, fontSize: 12.5 }}>Выберите услугу из списка ниже</p>
+          )}
+
+          <input
+            placeholder={needsAB ? "Откуда (где авто)" : "Адрес (место положения авто)"}
+            value={p.techAddress}
+            onChange={e => p.setTechAddress(e.target.value)}
+            style={s.input}
+          />
+          {needsAB && (
+            <>
+              <input placeholder="Куда (назначение)" value={p.techTo} onChange={e => p.setTechTo(e.target.value)} style={s.input} />
+              <input type="number" min="1" placeholder="Расстояние A→B, км" value={p.techDistance} onChange={e => p.setTechDistance(e.target.value)} style={s.input} />
+              <p style={{ margin: "4px 0 0", fontSize: 12, color: t.sub, lineHeight: 1.45 }}>
+                {key === "tow"
+                  ? "Эвакуация считается по тарифу грузоперевозок — только предзаказ (дата и время обязательны)."
+                  : "Трезвый водитель рассчитывается по тройному тарифу такси за км, но не меньше 1000 ₽."}
+              </p>
+            </>
+          )}
+
+          <label style={s.formLabel}>Дата подачи</label>
+          <input
+            type="date"
+            min={new Date().toISOString().slice(0, 10)}
+            max={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}
+            value={p.techDate}
+            onChange={e => p.setTechDate(e.target.value)}
+            style={s.input}
+          />
+          <label style={s.formLabel}>Время подачи</label>
+          <input type="time" value={p.techTime} onChange={e => p.setTechTime(e.target.value)} style={s.input} />
+
+          <label style={s.formLabel}>Комментарий</label>
+          <input placeholder="Необязательно" value={p.techComment} onChange={e => p.setTechComment(e.target.value)} style={s.input} />
+
+          <button onClick={p.createTechHelpOrder} style={{ ...s.btnYellow, marginTop: 10 }}>
+            Заказать автотехпомощь
+          </button>
+        </div>
+      </div>
+
+      {TECH_HELP_SERVICES.map(x => (
+        <button
+          key={x.key}
+          onClick={() => p.setTechService(x)}
+          style={{
+            width: "100%", textAlign: "left", marginTop: 10, cursor: "pointer",
+            padding: 16, borderRadius: 16, fontFamily: "inherit",
+            background: p.techService?.key === x.key ? t.accentSoft : t.card,
+            border: p.techService?.key === x.key ? `2px solid ${t.accent}` : `1px solid ${t.border}`,
+          }}
+        >
+          <strong style={{ color: t.text, fontSize: 14 }}>{x.title}</strong>
+          <p style={{ color: t.sub, fontSize: 12.5, margin: "5px 0" }}>{x.desc}</p>
+          <strong style={{ color: t.accent }}>
+            {priceLabel(x)}
+          </strong>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function InfoPage({ s, t }) {
   return (
     <div style={{ padding: "18px 16px 24px" }}>
       <h1 style={s.pageTitle}>Информация</h1>
-      <div style={s.listGroup}>
+
+      <div style={{ ...s.listGroup, marginBottom: 14 }}>
         <div style={{ padding: 16 }}>
           <strong style={{ display: "block", marginBottom: 6, color: t.text }}>Тарифы</strong>
-          <p style={{ color: t.sub, fontSize: 13, lineHeight: 1.55, margin: 0 }}>
+          <p style={{ color: t.sub, fontSize: 13, lineHeight: 1.55, margin: "0 0 10px" }}>
+            <strong style={{ color: t.text }}>Такси</strong><br />
             Стандарт: 150 ₽, включено 1,5 км, далее 15 ₽/км в городе и 20 ₽/км за городом.<br />
             Межгород: 40 ₽/км, минимум 1000 ₽.
           </p>
+          <p style={{ color: t.sub, fontSize: 13, lineHeight: 1.55, margin: "0 0 10px" }}>
+            <strong style={{ color: t.text }}>Грузоперевозки</strong><br />
+            700 ₽ + 35 ₽/км; грузчики 500 ₽/час за человека.
+          </p>
+          <p style={{ color: t.sub, fontSize: 13, lineHeight: 1.55, margin: 0 }}>
+            <strong style={{ color: t.text }}>Автотехпомощь</strong><br />
+            Прикурить авто — 500 ₽<br />
+            Подкачать колесо — 250 ₽<br />
+            Диагностика — 1000 ₽<br />
+            Эвакуация — по тарифу грузоперевозок (только предзаказ)<br />
+            Трезвый водитель — A→B по тройному тарифу такси, минимум 1000 ₽
+          </p>
         </div>
-        <div style={{ height: 1, background: t.border }} />
+      </div>
+
+      <div style={s.listGroup}>
         <div style={{ padding: 16 }}>
           <strong style={{ display: "block", marginBottom: 6, color: t.text }}>Документы</strong>
           <p style={{ color: t.sub, fontSize: 13, lineHeight: 1.7, margin: 0 }}>

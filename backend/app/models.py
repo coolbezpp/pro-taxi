@@ -281,13 +281,28 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Operator(Base):
+    """Оператор (диспетчер): назначается администратором, входит по
+    логину/паролю в админку с ограниченным набором вкладок."""
+    __tablename__ = "operators"
+
+    id = Column(Integer, primary_key=True)
+    login = Column(String, unique=True, nullable=False, index=True)
+    password_hash = Column(String, nullable=False)
+    name = Column(String, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class OperatorMessage(Base):
-    """Переписка исполнителя с оператором + системные события для админки."""
+    """Переписка клиента/исполнителя с оператором + системные события."""
     __tablename__ = "operator_messages"
 
     id = Column(Integer, primary_key=True)
-    executor_id = Column(Integer, index=True, nullable=False)
-    author_role = Column(String, nullable=False, default="admin")  # executor | admin | system
+    # Строка принадлежит либо исполнителю, либо клиенту (ровно одна из связей).
+    executor_id = Column(Integer, index=True, nullable=True)
+    client_id = Column(Integer, index=True, nullable=True)
+    author_role = Column(String, nullable=False, default="admin")  # executor | client | admin | system
     text = Column(Text, nullable=False)
     is_read = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, server_default=func.now())

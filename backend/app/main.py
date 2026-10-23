@@ -318,6 +318,7 @@ SERVICE_ROLE = {
     "courier": "courier",
     "cargo": "cargo",
     "master": "master",
+    "tech_help": "driver",
 }
 # Тариф грузоперевозок: считаем на бэкенде, цену клиента не принимаем
 CARGO_BASE_PRICE = 700.0
@@ -325,6 +326,16 @@ CARGO_KM_PRICE = 35.0
 CARGO_LOADER_HOUR_PRICE = 500.0
 CARGO_LOADERS_MAX = 4
 CARGO_LOADER_HOURS_MAX = 12
+
+# Автотехпомощь: услуги и цены (цену считает сервер).
+# tow (эвакуация) — по тарифу грузоперевозок, sober_driver — 3× тариф такси.
+TECH_HELP_SERVICES = {
+    "jump_start":   {"title": "Прикурить авто",   "price": 500},
+    "tire_inflate": {"title": "Подкачать колесо", "price": 250},
+    "diagnostics":  {"title": "Диагностика",      "price": 1000},
+    "tow":          {"title": "Эвакуация",        "price": None},   # 700 + 35/км
+    "sober_driver": {"title": "Трезвый водитель", "price": None},   # max(1000, 3×такси)
+}
 
 
 class OrderIn(BaseModel):
@@ -353,7 +364,7 @@ def _client_from_token(db: Session, user: dict):
 @app.post("/api/orders")
 def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_current_user)):
     service = (data.service or "taxi").strip().lower()
-    if service not in ("taxi", "cargo"):
+    if service not in ("taxi", "cargo", "tech_help"):
         raise HTTPException(400, "Сервис недоступен")
     client = _client_from_token(db, user)
     cp=float(db.query(models.Setting).get("commission_percent").value) if db.query(models.Setting).get("commission_percent") else 15
@@ -367,6 +378,34 @@ def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_cu
         total = round(base, 2)
         tariff_code = "cargo"
         meta = {"loaders": loaders, "loader_hours": loader_hours}
+    elif service == "tech_help":
+        # Автотехпомощь: цена считается сервером по выбранной услуге
+        meta_in = data.meta or {}
+        key = (meta_in.get("service_key") or "").strip()
+        svc = TECH_HELP_SERVICES.get(key)
+        if not svc:
+            raise HTTPException(400, "Услуга автотехпомощи не выбрана")
+        dist = float(data.distance_km or 0)
+        if key == "sober_driver":
+            # Трезвый водитель: A→B по тройному тарифу такси, но не меньше 1000 ₽
+            std = db.query(models.Tariff).filter_by(code="standard", active=True).first()
+            if std:
+                taxi_price = pricing.calc_standard(dist, dist, 0, std, 0, 0, 0, 0)
+            else:
+                taxi_price = dist * 25.0
+            base = max(1000.0, round(taxi_price * 3))
+        elif key == "tow":
+            # Эвакуация — по тарифу грузоперевозок (без грузчиков), только предзаказ
+            if not data.scheduled_at:
+                raise HTTPException(400, "Эвакуация доступна только как предзаказ — укажите дату и время")
+            base = CARGO_BASE_PRICE + dist * CARGO_KM_PRICE
+        else:
+            base = float(svc["price"])
+        total = round(base)
+        tariff_code = "tech_help"
+        meta = {"service_key": key, "service_title": svc["title"]}
+        if (data.comment or "").strip():
+            meta["comment"] = data.comment.strip()[:500]
     else:
         t=db.query(models.Tariff).filter_by(code=data.tariff_code,active=True).first()
         if not t: raise HTTPException(400,"tariff unavailable")
@@ -391,7 +430,7 @@ def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_cu
     o=models.Order(client_id=client.id if client else data.client_id,service=service,tariff_code=tariff_code,from_address=data.from_address,to_address=data.to_address,
         from_lat=data.from_lat,from_lon=data.from_lon,to_lat=data.to_lat,to_lon=data.to_lon,distance_km=data.distance_km,
         city_distance_km=data.city_km,out_city_distance_km=data.out_km,base_price=base,options_price=0,
-        manual_increase=manual_increase if service != "cargo" else 0,total_price=total,commission_percent=cp,
+        manual_increase=manual_increase if service not in ("cargo", "tech_help") else 0,total_price=total,commission_percent=cp,
         commission_amount=pricing.commission(total,cp),children=data.children,animals=data.animals,child_seats=data.child_seats,
         scheduled_at=data.scheduled_at,status="created",meta=meta)
     db.add(o)
@@ -981,8 +1020,13 @@ def lost_item(order_id: int, request: Request, db: Session = Depends(get_db)):
 from app.security import (
     check_admin_password,
     create_admin_session,
+    create_operator_session,
     get_admin,
+    get_staff,
+    hash_password,
+    verify_password,
     invalidate_admin_session,
+    invalidate_operator_session,
     login_allowed,
     register_failed_login,
 )
@@ -1019,6 +1063,113 @@ def admin_logout(response: Response, request: Request):
     invalidate_admin_session(request.cookies.get("admin_session"))
     response.delete_cookie("admin_session")
     return {"ok": True}
+
+
+# --- Оператор (диспетчер): вход по логину/паролю + управление администратором ---
+class OperatorAuthIn(BaseModel):
+    login: str
+    password: str
+
+
+@app.post("/api/admin/operator/login")
+def operator_login(data: OperatorAuthIn, response: Response, request: Request,
+                   db: Session = Depends(get_db)):
+    """Оператор входит по логину/паролю (выдаёт администратор)."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not login_allowed(client_ip):
+        raise HTTPException(429, "Слишком много попыток. Повторите через 5 минут")
+
+    login = (data.login or "").strip()
+    op = db.query(models.Operator).filter(models.Operator.login == login).first()
+    if not op or not op.is_active or not verify_password(data.password or "", op.password_hash):
+        register_failed_login(client_ip)
+        raise HTTPException(401, "Неверный логин или пароль")
+
+    response.set_cookie(
+        key="operator_session",
+        value=create_operator_session(op.id, op.login),
+        httponly=True, samesite="lax", secure=True,
+        max_age=60 * 60 * 12,
+    )
+    return {"ok": True, "role": "operator", "login": op.login, "name": op.name}
+
+
+@app.post("/api/admin/operator/logout")
+def operator_logout(response: Response, request: Request):
+    invalidate_operator_session(request.cookies.get("operator_session"))
+    response.delete_cookie("operator_session")
+    return {"ok": True}
+
+
+class OperatorIn(BaseModel):
+    login: str
+    password: str | None = None
+    name: str | None = None
+
+
+@app.get("/api/admin/operators")
+def admin_list_operators(admin=Depends(get_admin), db: Session = Depends(get_db)):
+    rows = db.query(models.Operator).order_by(models.Operator.id.desc()).all()
+    return {"operators": [{
+        "id": r.id, "login": r.login, "name": r.name,
+        "is_active": bool(r.is_active),
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]}
+
+
+@app.post("/api/admin/operators", status_code=201)
+def admin_create_operator(data: OperatorIn, admin=Depends(get_admin), db: Session = Depends(get_db)):
+    """Администратор назначает оператора: задаёт логин и пароль."""
+    login = (data.login or "").strip()
+    password = (data.password or "").strip()
+    if not login or not password:
+        raise HTTPException(400, "Логин и пароль обязательны")
+    if db.query(models.Operator).filter(models.Operator.login == login).first():
+        raise HTTPException(400, "Такой логин уже занят")
+    op = models.Operator(
+        login=login,
+        password_hash=hash_password(password),
+        name=(data.name or "").strip() or None,
+    )
+    db.add(op)
+    db.commit()
+    db.refresh(op)
+    return {"ok": True, "id": op.id, "login": op.login}
+
+
+@app.put("/api/admin/operators/{operator_id}")
+def admin_update_operator(operator_id: int, data: OperatorIn,
+                          admin=Depends(get_admin), db: Session = Depends(get_db)):
+    op = db.query(models.Operator).get(operator_id)
+    if not op:
+        raise HTTPException(404, "Оператор не найден")
+    if data.name is not None:
+        op.name = data.name.strip() or None
+    if (data.password or "").strip():
+        op.password_hash = hash_password(data.password.strip())
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/operators/{operator_id}/toggle")
+def admin_toggle_operator(operator_id: int, admin=Depends(get_admin), db: Session = Depends(get_db)):
+    op = db.query(models.Operator).get(operator_id)
+    if not op:
+        raise HTTPException(404, "Оператор не найден")
+    op.is_active = not op.is_active
+    db.commit()
+    return {"ok": True, "is_active": bool(op.is_active)}
+
+
+@app.delete("/api/admin/operators/{operator_id}")
+def admin_delete_operator(operator_id: int, admin=Depends(get_admin), db: Session = Depends(get_db)):
+    op = db.query(models.Operator).get(operator_id)
+    if op:
+        db.delete(op)
+        db.commit()
+    return {"ok": True}
+
+
 class SettingIn(BaseModel): key:str; value:str
 @app.post("/api/admin/settings")
 def set_setting(data: SettingIn, db: Session=Depends(get_db)):
@@ -1687,6 +1838,222 @@ def change_client_balance(
     db.commit()
 
     return {"ok": True, "balance": client.balance}
+
+
+def _district_of(address):
+    """Район (муниципальное образование) Краснодарского края из полного
+    адреса заказа — формат OSM: «…, муниципальный округ Анапа,
+    Краснодарский край, Южный федеральный округ, …, Россия».
+    """
+    if not address:
+        return None
+    parts = [p.strip() for p in address.split(",")]
+    for i, p in enumerate(parts):
+        if "Краснодарский край" in p and i > 0 and parts[i - 1]:
+            return parts[i - 1]
+    # Запасной вариант: «… район» без упоминания края
+    for p in parts:
+        if p.endswith("район"):
+            return p
+    return None
+
+
+@app.get("/api/admin/dashboard")
+def admin_dashboard(
+    period: int = 30,
+    role: str | None = None,
+    district: str | None = None,
+    admin=Depends(get_admin),
+    db: Session = Depends(get_db),
+):
+    """Дашборд сервиса: ключевые показатели с выборкой по районам
+    Краснодарского края, фильтр по ролям, заблокированные и
+    отстранённые исполнители.
+
+    Роль применяется к заказам через исполнителя; район — по адресу
+    подачи. Фильтр по району для исполнителей означает «работал
+    в районе за период».
+    """
+    since = None if period <= 0 else datetime.utcnow() - timedelta(days=period)
+
+    # Исполнители и их роли одним запросом
+    executors = db.query(models.Executor).all()
+    roles_by_exec = {}
+    if executors:
+        for r in db.query(models.ExecutorRole).filter(
+            models.ExecutorRole.executor_id.in_([e.id for e in executors])
+        ).all():
+            roles_by_exec.setdefault(r.executor_id, []).append(r.role)
+
+    # Действующие отстранения
+    susp_by_exec = {
+        s.executor_id: s
+        for s in db.query(models.ExecutorSuspension).filter(
+            models.ExecutorSuspension.revoked_at.is_(None),
+            models.ExecutorSuspension.ends_at > datetime.utcnow(),
+        ).all()
+    }
+
+    # Заказы: район считаем из адреса подачи
+    orders = db.query(models.Order).all()
+    period_rows = []
+    districts = set()
+    undef_exists = False
+    for o in orders:
+        d = _district_of(o.from_address)
+        if d:
+            districts.add(d)
+        else:
+            undef_exists = bool(orders)
+        if since is None or (o.created_at and o.created_at >= since):
+            period_rows.append(
+                (o, d, roles_by_exec.get(o.executor_id) if o.executor_id else None)
+            )
+
+    # Район → заказы
+    if district == "__none__":
+        district_rows = [r for r in period_rows if r[1] is None]
+    elif district:
+        district_rows = [r for r in period_rows if r[1] == district]
+    else:
+        district_rows = period_rows
+
+    # Исполнители: район (работал в районе за период) → роль
+    f_exec_district = executors
+    if district:
+        d_ids = {r[0].executor_id for r in district_rows if r[0].executor_id}
+        f_exec_district = [e for e in executors if e.id in d_ids]
+    if role:
+        f_executors = [
+            e for e in f_exec_district if role in roles_by_exec.get(e.id, [])
+        ]
+        role_ids = {e.id for e in f_executors}
+        rows = [r for r in district_rows if r[0].executor_id in role_ids]
+    else:
+        f_executors = f_exec_district
+        rows = district_rows
+
+    # Итоги по заказам
+    completed = [r for r in rows if r[0].status == "completed"]
+    cancelled = [r for r in rows if r[0].status == "cancelled"]
+    active = [r for r in rows if r[0].status in (
+        "created", "assigned", "accepted", "in_progress",
+    )]
+    revenue = round(sum(float(r[0].total_price or 0) for r in completed), 2)
+    commission = round(sum(float(r[0].commission_amount or 0) for r in completed), 2)
+    client_ids = {r[0].client_id for r in rows if r[0].client_id}
+
+    # Динамика по дням
+    day_map = {}
+    for o, _, _ in rows:
+        if o.created_at:
+            k = o.created_at.date()
+            day_map[k] = day_map.get(k, 0) + 1
+    by_day = [
+        {"day": k.strftime("%d.%m"), "orders": v}
+        for k, v in sorted(day_map.items())
+    ]
+
+    # Районы (период + роль, без районного фильтра — чтобы видеть выборку целиком)
+    role_ids_all = (
+        {e.id for e in executors if role in roles_by_exec.get(e.id, [])}
+        if role else None
+    )
+    rows_bd = [
+        r for r in period_rows
+        if role_ids_all is None or r[0].executor_id in role_ids_all
+    ]
+    dist_map = {}
+    for o, d, _ in rows_bd:
+        key = d or "Не определён"
+        m = dist_map.setdefault(
+            key, {"district": key, "orders": 0, "completed": 0, "revenue": 0.0}
+        )
+        m["orders"] += 1
+        if o.status == "completed":
+            m["completed"] += 1
+            m["revenue"] += float(o.total_price or 0)
+    by_district = sorted(dist_map.values(), key=lambda x: -x["orders"])
+    for m in by_district:
+        m["revenue"] = round(m["revenue"], 2)
+
+    # Роли: исполнители (район, без ролевого фильтра) + заказы за период/район
+    role_map = {}
+    for e in f_exec_district:
+        for rl in roles_by_exec.get(e.id, []):
+            m = role_map.setdefault(rl, {
+                "role": rl, "executors": 0, "online": 0,
+                "blocked": 0, "suspended": 0, "orders": 0,
+            })
+            m["executors"] += 1
+            if e.is_online:
+                m["online"] += 1
+            if e.status == "rejected":
+                m["blocked"] += 1
+            if e.id in susp_by_exec:
+                m["suspended"] += 1
+    for o, _, ex_roles in district_rows:
+        if o.executor_id and ex_roles:
+            for rl in ex_roles:
+                m = role_map.setdefault(rl, {
+                    "role": rl, "executors": 0, "online": 0,
+                    "blocked": 0, "suspended": 0, "orders": 0,
+                })
+                m["orders"] += 1
+    by_role = sorted(role_map.values(), key=lambda x: -x["executors"])
+
+    # Заблокированные (отклонённые) и отстранённые — в текущей выборке
+    def _exec_json(e):
+        return {
+            "id": e.id,
+            "name": e.name,
+            "phone": e.phone,
+            "status": e.status,
+            "active_role": e.active_role,
+            "rating_percent": (
+                e.rating_percent if e.rating_percent is not None else 100
+            ),
+        }
+
+    blocked = [_exec_json(e) for e in f_executors if e.status == "rejected"]
+    suspended = []
+    for e in f_executors:
+        s = susp_by_exec.get(e.id)
+        if s:
+            item = _exec_json(e)
+            item.update({
+                "ends_at": s.ends_at.isoformat() if s.ends_at else None,
+                "reason": s.reason,
+                "source": s.source,
+            })
+            suspended.append(item)
+
+    return {
+        "period": period,
+        "role": role,
+        "district": district,
+        "totals": {
+            "orders": len(rows),
+            "completed": len(completed),
+            "cancelled": len(cancelled),
+            "active": len(active),
+            "revenue": revenue,
+            "commission": commission,
+            "avg_check": round(revenue / len(completed), 2) if completed else 0,
+            "clients": len(client_ids),
+            "executors": len(f_executors),
+            "online": sum(1 for e in f_executors if e.is_online),
+        },
+        "by_day": by_day,
+        "roles": sorted({r for v in roles_by_exec.values() for r in v}),
+        "districts": sorted(districts) + (["__none__"] if undef_exists else []),
+        "by_district": by_district,
+        "by_role": by_role,
+        "blocked": blocked,
+        "suspended": suspended,
+    }
+
+
 @app.get("/api/admin/analytics")
 def admin_analytics(admin=Depends(get_admin), db: Session = Depends(get_db)):
     orders = db.query(models.Order).all()

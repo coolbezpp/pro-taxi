@@ -92,6 +92,70 @@ def get_admin(admin_session: str | None = Cookie(default=None)):
         )
 
 
+# --- сессия оператора ---
+# Отдельная cookie от админской: оператор входит по логину/паролю и видит
+# только разрешённые вкладки. Сессия тоже живёт в памяти процесса.
+_operator_sessions: dict[str, dict] = {}  # token -> {operator_id, login, expires}
+
+
+def _sweep_operator_sessions() -> None:
+    now = time.time()
+    for token in [t for t, s in _operator_sessions.items() if s["expires"] <= now]:
+        del _operator_sessions[token]
+
+
+def create_operator_session(operator_id: int, login: str) -> str:
+    _sweep_operator_sessions()
+    token = secrets.token_urlsafe(32)
+    _operator_sessions[token] = {
+        "operator_id": operator_id,
+        "login": login,
+        "expires": time.time() + ADMIN_SESSION_TTL,
+    }
+    return token
+
+
+def invalidate_operator_session(token: str | None) -> None:
+    if token:
+        _operator_sessions.pop(token, None)
+
+
+def operator_session_data(token: str | None) -> dict | None:
+    """Данные активной сессии оператора или None."""
+    if not token:
+        return None
+    _sweep_operator_sessions()
+    s = _operator_sessions.get(token)
+    return s if s and s["expires"] > time.time() else None
+
+
+def get_staff(
+    admin_session: str | None = Cookie(default=None),
+    operator_session: str | None = Cookie(default=None),
+):
+    """Администратор ИЛИ оператор — для общих разделов (заказы, чаты,
+    исполнители, клиенты и т.д.). Возвращает принципал с ролью."""
+    if admin_session_valid(admin_session):
+        return {"role": "admin"}
+    op = operator_session_data(operator_session)
+    if op:
+        return {
+            "role": "operator",
+            "operator_id": op["operator_id"],
+            "login": op["login"],
+        }
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Требуется вход",
+    )
+
+
+def require_operator(staff: dict = Depends(get_staff)):
+    if staff.get("role") != "operator" and staff.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Только для оператора")
+    return staff
+
+
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
