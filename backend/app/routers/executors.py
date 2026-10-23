@@ -599,7 +599,7 @@ def admin_executor_profile(
             "status": o.status,
             "from_address": o.from_address,
             "to_address": o.to_address,
-            "total_price": o.total_price,
+            "total_price": round(o.total_price or 0),
             "created_at": o.created_at.isoformat() if o.created_at else None,
         } for o in orders],
     }

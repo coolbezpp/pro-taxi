@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from app.config import settings
 from app.db import get_db
 from app import models, pricing, worktime, rating
-from app.security import create_token, hash_password, verify_password, get_current_user
+from app.security import create_token, hash_password, verify_password, get_current_user, get_staff
 from pydantic import BaseModel
 app=FastAPI(title="Pro API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -371,7 +371,6 @@ def _create_order_internal(db: Session, data: OrderIn, client):
     service = (data.service or "taxi").strip().lower()
     if service not in ("taxi", "cargo", "tech_help"):
         raise HTTPException(400, "Сервис недоступен")
-    client = _client_from_token(db, user)
     cp=float(db.query(models.Setting).get("commission_percent").value) if db.query(models.Setting).get("commission_percent") else 15
 
     if service == "cargo":
@@ -435,7 +434,7 @@ def _create_order_internal(db: Session, data: OrderIn, client):
     o=models.Order(client_id=client.id if client else data.client_id,service=service,tariff_code=tariff_code,from_address=data.from_address,to_address=data.to_address,
         from_lat=data.from_lat,from_lon=data.from_lon,to_lat=data.to_lat,to_lon=data.to_lon,distance_km=data.distance_km,
         city_distance_km=data.city_km,out_city_distance_km=data.out_km,base_price=base,options_price=0,
-        manual_increase=manual_increase if service not in ("cargo", "tech_help") else 0,total_price=total,commission_percent=cp,
+        manual_increase=manual_increase if service not in ("cargo", "tech_help") else 0,total_price=round(total),commission_percent=cp,
         commission_amount=pricing.commission(total,cp),children=data.children,animals=data.animals,child_seats=data.child_seats,
         scheduled_at=data.scheduled_at,status="created",meta=meta)
     db.add(o)
@@ -468,7 +467,20 @@ def admin_create_order(
              f"{o.from_address} → {o.to_address or '—'}.",
     ))
     db.commit()
-    return o
+    # commit() протухает атрибуты ORM-объекта — возвращаем явный словарь
+    return {
+        "id": o.id,
+        "status": o.status,
+        "service": o.service,
+        "tariff_code": o.tariff_code,
+        "from_address": o.from_address,
+        "to_address": o.to_address,
+        "distance_km": o.distance_km,
+        "total_price": round(o.total_price or 0),
+        "commission_percent": o.commission_percent,
+        "scheduled_at": o.scheduled_at.isoformat() if o.scheduled_at else None,
+        "created_at": o.created_at.isoformat() if o.created_at else None,
+    }
 
 @app.get("/api/me/orders")
 def my_orders(user=Depends(get_current_user), db: Session=Depends(get_db)):
@@ -495,7 +507,7 @@ def my_orders(user=Depends(get_current_user), db: Session=Depends(get_db)):
             "tariff_code": o.tariff_code,
             "from_address": o.from_address,
             "to_address": o.to_address,
-            "total_price": o.total_price,
+            "total_price": round(o.total_price or 0),
             "manual_increase": o.manual_increase,
             "comment": (o.meta or {}).get("comment") if o.meta else None,
             "favorite": bool(o.favorite),
@@ -662,7 +674,7 @@ def waiting(order_id:int, minutes:int, db: Session=Depends(get_db)):
     o=db.query(models.Order).get(order_id)
     if not o: raise HTTPException(404)
     o.waiting_price=pricing.calc_waiting(minutes)
-    o.total_price=o.base_price+o.options_price+o.waiting_price+o.manual_increase
+    o.total_price=round((o.base_price or 0)+(o.options_price or 0)+(o.waiting_price or 0)+(o.manual_increase or 0))
     o.commission_amount=pricing.commission(o.total_price,o.commission_percent)
     db.commit(); return o
 
@@ -726,7 +738,7 @@ def available_orders(executor_id: int, role: str, db: Session = Depends(get_db))
             "from_address": o.from_address,
             "to_address": o.to_address,
             "distance_km": o.distance_km,
-            "total_price": o.total_price,
+            "total_price": round(o.total_price or 0),
             "scheduled_at": o.scheduled_at,
             "created_at": o.created_at,
             "meta": meta,
@@ -1275,13 +1287,13 @@ def admin_delete_operator(operator_id: int, admin=Depends(get_admin), db: Sessio
 
 class SettingIn(BaseModel): key:str; value:str
 @app.post("/api/admin/settings")
-def set_setting(data: SettingIn, db: Session=Depends(get_db)):
+def set_setting(data: SettingIn, admin=Depends(get_admin), db: Session=Depends(get_db)):
     s=db.query(models.Setting).get(data.key)
     if not s: s=models.Setting(key=data.key,value=data.value); db.add(s)
     else: s.value=data.value
     db.commit(); return {"ok":True}
 @app.get("/api/admin/settings")
-def get_settings(db: Session=Depends(get_db)):
+def get_settings(admin=Depends(get_admin), db: Session=Depends(get_db)):
     return {s.key:s.value for s in db.query(models.Setting).all()}
 
 from .routers.executors import router as executors_router
@@ -1345,7 +1357,7 @@ def create_master_order(data: MasterOrderIn, db: Session = Depends(get_db), user
         options_price=0,
         waiting_price=0,
         manual_increase=0,
-        total_price=price,
+        total_price=round(price),
         commission_percent=commission_percent,
         commission_amount=commission_amount,
         children=False,
@@ -1422,7 +1434,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
                 "id": order.id,
                 "service": order.service,
                 "status": order.status,
-                "total_price": order.total_price,
+                "total_price": round(order.total_price or 0),
                 "from_address": order.from_address,
                 "to_address": order.to_address,
                 "share_code": order.share_code,
@@ -1459,7 +1471,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
                 "id": order.id,
                 "service": order.service,
                 "status": order.status,
-                "total_price": order.total_price,
+                "total_price": round(order.total_price or 0),
                 "from_address": order.from_address,
                 "to_address": order.to_address,
                 "share_code": order.share_code,
@@ -1712,7 +1724,7 @@ def executor_available_orders(
         "from_address": o.from_address,
         "to_address": o.to_address,
         "distance_km": o.distance_km,
-        "total_price": o.total_price,
+        "total_price": round(o.total_price or 0),
         "status": o.status,
     } for o in orders]}
 @app.get("/api/admin/orders")
@@ -1739,7 +1751,7 @@ def admin_orders(
         "status": o.status,
         "from_address": o.from_address,
         "to_address": o.to_address,
-        "total_price": o.total_price,
+        "total_price": round(o.total_price or 0),
         "client_id": o.client_id,
         "executor_id": o.executor_id,
         "created_at": o.created_at.isoformat() if o.created_at else None,
@@ -1784,7 +1796,7 @@ def admin_client_profile(client_id: int, staff=Depends(get_staff), db: Session=D
             "service": o.service,
             "from_address": o.from_address,
             "to_address": o.to_address,
-            "total_price": o.total_price,
+            "total_price": round(o.total_price or 0),
             "favorite": bool(o.favorite),
             "favorite_title": o.favorite_title,
             "created_at": o.created_at.isoformat() if o.created_at else None,

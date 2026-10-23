@@ -85,7 +85,7 @@ def decide_extra(extra_id: int, data: DecisionIn, db: Session = Depends(get_db))
         order = db.query(Order).get(extra.order_id)
         if order:
             order.options_price = (order.options_price or 0) + extra.price
-            order.total_price = (order.total_price or 0) + extra.price
+            order.total_price = round((order.total_price or 0) + extra.price)
             order.commission_amount = round(
                 (order.total_price or 0) * (order.commission_percent or 15) / 100,
                 2,

@@ -218,7 +218,7 @@ def track_order(
         "from_lon": order.from_lon,
         "to_lat": order.to_lat,
         "to_lon": order.to_lon,
-        "total_price": order.total_price,
+        "total_price": round(order.total_price or 0),
         "comment": (order.meta or {}).get("comment") if order.meta else None,
         "client_name": client_name,
         "executor": executor_info,

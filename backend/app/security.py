@@ -2,18 +2,27 @@ from fastapi import Depends, HTTPException, status, Cookie
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from app.config import settings
 from app.db import get_db
+import bcrypt
 import hmac
 import os
 import secrets
 import time
 from collections import deque
 
-pwd=CryptContext(schemes=["bcrypt"])
-def hash_password(p): return pwd.hash(p)
-def verify_password(p,h): return pwd.verify(p,h)
+# bcrypt напрямую, без passlib: passlib 1.7.4 ломается на bcrypt>=4.1
+# (и версия, и длина пароля) — пароль режем до 72 байт, как ждёт bcrypt.
+def hash_password(p):
+    raw = str(p).encode("utf-8")[:72]
+    return bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(p, h):
+    try:
+        return bcrypt.checkpw(str(p).encode("utf-8")[:72], (h or "").encode("utf-8"))
+    except Exception:
+        return False
 def create_token(user_id, role):
     return jwt.encode({"sub":str(user_id),"role":role,"exp":datetime.utcnow()+timedelta(days=30)},settings.jwt_secret,algorithm="HS256")
 bearer_scheme = HTTPBearer(auto_error=False)

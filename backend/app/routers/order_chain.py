@@ -71,7 +71,7 @@ def chain_candidates(order_id: int, executor_id: int, db: Session = Depends(get_
             "id": o.id,
             "from_address": o.from_address,
             "to_address": o.to_address,
-            "total_price": o.total_price,
+            "total_price": round(o.total_price or 0),
             "tariff_code": getattr(o, "tariff_code", ""),
             "reverse": intercity and reverse_match(current, o)
         })
@@ -187,7 +187,7 @@ def executor_orders(executor_id: int, db: Session = Depends(get_db)):
         "tariff_code": o.tariff_code,
         "from_address": o.from_address,
         "to_address": o.to_address,
-        "total_price": o.total_price,
+        "total_price": round(o.total_price or 0),
         "client_id": o.client_id,
         "executor_id": o.executor_id,
         "client_rating": client_percents.get(o.client_id),
