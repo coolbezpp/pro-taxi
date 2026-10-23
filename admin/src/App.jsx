@@ -308,15 +308,22 @@ function Icon({ name, size = 20, style }) {
 
 const MENU = [
   { id: "dashboard", icon: "home", title: "Дашборд" },
-  { id: "analytics", icon: "chart", title: "Статистика" },
+  { id: "analytics", icon: "chart", title: "Статистика", adminOnly: true },
   { id: "orders", icon: "orders", title: "Заказы", count: "orders" },
   { id: "clients", icon: "person", title: "Клиенты", count: "clients" },
   { id: "executors", icon: "car", title: "Исполнители", count: "executors" },
   { id: "photo-checks", icon: "camera", title: "Фотоконтроль", count: "photoChecks" },
   { id: "notifications", icon: "bell", title: "Уведомления", count: "messages" },
   { id: "ads", icon: "mega", title: "Реклама" },
-  { id: "city-zones", icon: "map", title: "Городские зоны" },
-  { id: "settings", icon: "gear", title: "Настройки" },
+  { id: "city-zones", icon: "map", title: "Городские зоны", adminOnly: true },
+  { id: "settings", icon: "gear", title: "Настройки", adminOnly: true },
+  { id: "operators", icon: "person", title: "Операторы", adminOnly: true },
+];
+
+// У оператора свой список вкладок: диспетчерская работа без админских разделов
+const OPERATOR_TABS = [
+  "orders", "clients", "executors", "photo-checks",
+  "notifications", "ads", "dashboard",
 ];
 
 // Типы фото-контроля (как у конкурентов: авто, документы, селфи, номер)
@@ -334,12 +341,13 @@ const PAGE_INFO = {
   clients: ["Клиенты", "База клиентов, балансы и контакты"],
   executors: ["Исполнители", "Такси, курьеры, мастера и их балансы"],
   "photo-checks": ["Фотоконтроль", "Запросы фото и решения модератора"],
-  notifications: ["Уведомления", "Сообщения исполнителей и служебные события"],
+  notifications: ["Уведомления", "Чаты с клиентами и исполнителями, служебные события"],
   ads: ["Реклама", "Блоки предложений на главной клиентского миниаппа"],
   jobs: ["Вакансии", "Модерация объявлений о работе"],
   rentals: ["Аренда", "Модерация объявлений об аренде авто и жилья"],
   "city-zones": ["Городские зоны", "Границы города и зоны на карте"],
   settings: ["Настройки", "Комиссия и параметры сервиса"],
+  operators: ["Операторы", "Доступ в панель: логины, пароли, включение и удаление"],
 };
 
 const STATUS_LABELS = {
@@ -365,6 +373,16 @@ const SERVICE_LABELS = {
   courier: "Курьер",
   cargo: "Грузоперевозки",
   master: "Мастера",
+  tech_help: "Автотехпомощь",
+};
+
+// Какая роль исполнителя нужна для услуги (для диспетчеризации)
+const SERVICE_ROLE = {
+  taxi: "driver",
+  courier: "courier",
+  cargo: "cargo",
+  master: "master",
+  tech_help: "driver",
 };
 
 const ROLE_LABELS = {
@@ -386,11 +404,23 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [clock, setClock] = useState("");
   const [expandedOrder, setExpandedOrder] = useState(null);
+  // Диспетчеризация: выбранный исполнитель по каждому заказу
+  const [assignPick, setAssignPick] = useState({});
+  const [assigning, setAssigning] = useState(null);
   const [commission, setCommission] = useState("15");
   const [msg, setMsg] = useState("");
   const [orders, setOrders] = useState([]);
   const [orderStatus, setOrderStatus] = useState("");
   const [orderService, setOrderService] = useState("");
+  // Создание заказа за клиента (диспетчерская)
+  const [createForm, setCreateForm] = useState({
+    client_id: "", service: "taxi", tech_key: "jump_start",
+    from_address: "", to_address: "", distance_km: "",
+    date: "", time: "", comment: "",
+  });
+  const [creatingOrder, setCreatingOrder] = useState(false);
+  const [createMsg, setCreateMsg] = useState("");
+  const [createErr, setCreateErr] = useState(false);
   const [clients, setClients] = useState([]);
   const [executors, setExecutors] = useState([]);
   const [photoChecks, setPhotoChecks] = useState([]);
@@ -434,6 +464,15 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
+  // Кто вошёл: админ или оператор (определяет доступные вкладки)
+  const [staff, setStaff] = useState(null);
+  const [loginMode, setLoginMode] = useState("admin");
+  const [opLogin, setOpLogin] = useState("");
+  const [opPassword, setOpPassword] = useState("");
+  // Управление операторами (только админ)
+  const [operators, setOperators] = useState([]);
+  const [opForm, setOpForm] = useState({ login: "", password: "", name: "" });
+  const [opMsg, setOpMsg] = useState("");
 
   useEffect(() => {
     checkAuth();
@@ -443,6 +482,26 @@ export default function App() {
   useEffect(() => {
     if (tab === "dashboard" && !needLogin) loadDashboard();
   }, [tab, dashPeriod, dashRole, dashDistrict, needLogin]);
+
+  // Оператору недоступные вкладки закрываем, «Операторы» грузим только админу
+  useEffect(() => {
+    if (!staff) return;
+    if (staff.role === "operator" && !OPERATOR_TABS.includes(tab)) setTab("orders");
+    if (tab === "operators" && staff.role === "admin") loadOperators();
+  }, [staff, tab]);
+
+  // Лента чатов: загрузка при открытии вкладки и живой опрос
+  useEffect(() => {
+    if (tab !== "notifications" || needLogin) return;
+    loadMessages();
+    const it = setInterval(loadMessages, 15000);
+    return () => clearInterval(it);
+  }, [tab, needLogin]);
+
+  // Фотоконтроль тоже грузим при открытии вкладки (раньше — только после решения)
+  useEffect(() => {
+    if (tab === "photo-checks" && !needLogin) loadPhotoChecks();
+  }, [tab, needLogin]);
 
   // Живые часы в шапке — как в админке конкурента
   useEffect(() => {
@@ -457,7 +516,8 @@ export default function App() {
   }, []);
 
   async function checkAuth() {
-    const res = await fetch(API + "/admin/analytics", {
+    // whoami работает и для админа, и для оператора — по нему decide вкладки
+    const res = await fetch(API + "/admin/whoami", {
       credentials: "include",
     });
 
@@ -466,7 +526,9 @@ export default function App() {
       return;
     }
 
-    loadAll();
+    const data = await res.json().catch(() => ({}));
+    setStaff(data);
+    loadAll(data);
   }
 
   async function loadSettings() {
@@ -477,15 +539,19 @@ export default function App() {
     setCommission(data.commission_percent || "15");
   }
 
-  async function loadAll() {
-    await Promise.all([
+  async function loadAll(who) {
+    const role = (who || staff)?.role || "admin";
+    const base = [
       loadOrders(),
       loadClients(),
       loadExecutors(),
       loadAds(),
-      loadAnalytics(),
-      loadSettings(),
-    ]);
+      loadMessages(),
+    ];
+    if (role === "admin") {
+      base.push(loadAnalytics(), loadSettings());
+    }
+    await Promise.all(base);
   }
 
   async function loadAds() {
@@ -572,6 +638,86 @@ export default function App() {
 
     const data = await res.json().catch(() => ({}));
     setOrders(data.orders || []);
+  }
+
+  // Диспетчеризация: админ/оператор назначает исполнителя на заказ
+  async function assignOrder(orderId) {
+    const execId = assignPick[orderId];
+    if (!execId) return;
+    setAssigning(orderId);
+    setError("");
+    try {
+      const res = await fetch(`${API}/orders/${orderId}/assign/${execId}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.detail || "Не удалось назначить исполнителя");
+      } else {
+        setExpandedOrder(orderId);
+      }
+      await loadOrders();
+    } catch (e) {
+      setError(e.message || "Не удалось назначить исполнителя");
+    } finally {
+      setAssigning(null);
+    }
+  }
+
+  // Оператор оформляет заказ за клиента — цена считается сервером
+  async function createForClient(e) {
+    e.preventDefault();
+    setCreateMsg("");
+    setCreateErr(false);
+    const f = createForm;
+    if (!f.client_id || !f.from_address.trim()) {
+      setCreateMsg("Выберите клиента и укажите адрес подачи");
+      setCreateErr(true);
+      return;
+    }
+    const dist = Number(f.distance_km) || 0;
+    const isTaxi = f.service === "taxi";
+    const body = {
+      client_id: Number(f.client_id),
+      service: f.service,
+      tariff_code: isTaxi ? "standard" : f.service,
+      from_address: f.from_address.trim(),
+      to_address: f.to_address.trim(),
+      distance_km: dist,
+      city_km: isTaxi ? dist : 0,
+      out_km: 0,
+      scheduled_at: f.date && f.time
+        ? new Date(`${f.date}T${f.time}:00`).toISOString()
+        : null,
+      comment: f.comment.trim() || null,
+      meta: f.service === "tech_help" ? { service_key: f.tech_key } : {},
+    };
+    setCreatingOrder(true);
+    try {
+      const res = await fetch(API + "/admin/orders", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCreateMsg(data.detail || "Не удалось создать заказ");
+        setCreateErr(true);
+      } else {
+        setCreateMsg(`Заказ №${data.id} создан · ${data.total_price} ₽`);
+        setCreateForm(prev => ({
+          ...prev, from_address: "", to_address: "", distance_km: "", comment: "",
+        }));
+        loadOrders();
+      }
+    } catch (e2) {
+      setCreateMsg(e2.message || "Ошибка при создании заказа");
+      setCreateErr(true);
+    } finally {
+      setCreatingOrder(false);
+    }
   }
 
   async function loadClients() {
@@ -726,17 +872,21 @@ export default function App() {
     }
   }
 
-  async function replyTo(executorId, text) {
+  // Ключ собеседника в поле ответа: клиент или исполнитель
+  const peerKey = m => (m.client_id ? `c${m.client_id}` : `e${m.executor_id}`);
+
+  async function replyTo(m, text) {
     const body = (text || "").trim();
     if (!body) return;
+    const q = m.client_id ? `client_id=${m.client_id}` : `executor_id=${m.executor_id}`;
     try {
-      await fetch(`${API}/admin/messages?executor_id=${executorId}`, {
+      await fetch(`${API}/admin/messages?${q}`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: body }),
       });
-      setReplyText(t => ({ ...t, [executorId]: "" }));
+      setReplyText(t => ({ ...t, [peerKey(m)]: "" }));
       await loadMessages();
     } catch (e) {
       setError(e.message || "Не удалось отправить ответ");
@@ -785,6 +935,29 @@ export default function App() {
   async function login() {
     setLoginError("");
 
+    if (loginMode === "operator") {
+      const res = await fetch(API + "/admin/operator/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ login: opLogin.trim(), password: opPassword }),
+      });
+
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setLoginError(d.detail || "Неверный логин или пароль");
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      setStaff({ role: "operator", name: data.name || data.login });
+      setNeedLogin(false);
+      setOpPassword("");
+      setTab("orders");
+      loadAll({ role: "operator" });
+      return;
+    }
+
     const res = await fetch(API + "/admin/login", {
       method: "POST",
       credentials: "include",
@@ -797,18 +970,71 @@ export default function App() {
       return;
     }
 
+    setStaff({ role: "admin", name: "Администратор" });
     setNeedLogin(false);
     setPassword("");
-    loadAll();
+    loadAll({ role: "admin" });
   }
 
   async function logout() {
-    await fetch(API + "/admin/logout", {
+    // Закрываем обе сессии — cookie может быть админской или операторской
+    await fetch(API + "/admin/logout", { method: "POST", credentials: "include" });
+    await fetch(API + "/admin/operator/logout", { method: "POST", credentials: "include" });
+    setStaff(null);
+    setMenuOpen(false);
+    setNeedLogin(true);
+  }
+
+  // --- операторы (только админ) ---
+  async function loadOperators() {
+    const res = await fetch(API + "/admin/operators", { credentials: "include" });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    setOperators(data.operators || []);
+  }
+
+  async function createOperator(e) {
+    e.preventDefault();
+    setOpMsg("");
+    if (!opForm.login.trim() || !opForm.password) {
+      setOpMsg("Логин и пароль обязательны");
+      return;
+    }
+    const res = await fetch(API + "/admin/operators", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        login: opForm.login.trim(),
+        password: opForm.password,
+        name: opForm.name.trim() || null,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setOpMsg(data.detail || "Не удалось создать оператора");
+      return;
+    }
+    setOpForm({ login: "", password: "", name: "" });
+    setOpMsg("Оператор создан");
+    loadOperators();
+  }
+
+  async function toggleOperator(id) {
+    await fetch(`${API}/admin/operators/${id}/toggle`, {
       method: "POST",
       credentials: "include",
     });
-    setMenuOpen(false);
-    setNeedLogin(true);
+    loadOperators();
+  }
+
+  async function deleteOperator(id) {
+    if (!window.confirm("Удалить оператора? Доступ будет отключён сразу.")) return;
+    await fetch(`${API}/admin/operators/${id}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    loadOperators();
   }
 
   async function save() {
@@ -933,12 +1159,52 @@ export default function App() {
             <h1 style={{ margin: 0, fontSize: 20 }}>Про — Админпанель</h1>
           </div>
 
-          <div style={{ position: "relative", margin: "16px 0 12px" }}>
+          {/* Режим входа: администратор по паролю, оператор по логину и паролю */}
+          <div style={{
+            display: "flex", gap: 6, background: "#f1f1f6",
+            padding: 4, borderRadius: 10, margin: "14px 0 12px",
+          }}>
+            {[["admin", "Администратор"], ["operator", "Оператор"]].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => { setLoginMode(id); setLoginError(""); }}
+                style={{
+                  flex: 1, padding: "9px 8px", borderRadius: 8, border: 0,
+                  background: loginMode === id ? PURPLE : "transparent",
+                  color: loginMode === id ? "#fff" : "#77748a",
+                  fontWeight: 750, fontSize: 13.5, cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >{label}</button>
+            ))}
+          </div>
+
+          {loginMode === "operator" && (
+            <input
+              placeholder="Логин оператора"
+              value={opLogin}
+              onChange={e => setOpLogin(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && login()}
+              style={{
+                width: "100%",
+                padding: 13,
+                marginBottom: 10,
+                borderRadius: 10,
+                border: "1px solid #e2e2ea",
+                background: "#fafafd",
+                boxSizing: "border-box",
+                fontFamily: "inherit",
+                fontSize: 15,
+              }}
+            />
+          )}
+
+          <div style={{ position: "relative", margin: loginMode === "operator" ? "0 0 12px" : "16px 0 12px" }}>
             <input
               type={showPassword ? "text" : "password"}
-              placeholder="Пароль администратора"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
+              placeholder={loginMode === "operator" ? "Пароль оператора" : "Пароль администратора"}
+              value={loginMode === "operator" ? opPassword : password}
+              onChange={e => loginMode === "operator" ? setOpPassword(e.target.value) : setPassword(e.target.value)}
               onKeyDown={e => e.key === "Enter" && login()}
               style={{
                 width: "100%",
@@ -1014,6 +1280,9 @@ export default function App() {
   }
 
   const page = PAGE_INFO[tab] || ["", ""];
+  // Оператор видит только диспетчерские вкладки
+  const isOperator = staff?.role === "operator";
+  const visibleMenu = MENU.filter(m => !isOperator || OPERATOR_TABS.includes(m.id));
 
   return (
     <div style={{
@@ -1045,7 +1314,7 @@ export default function App() {
             fontSize: 17, fontWeight: 700, whiteSpace: "nowrap",
             overflow: "hidden", textOverflow: "ellipsis",
           }}>
-            Про — {clock}
+            Про{isOperator && staff?.name ? ` · ${staff.name}` : ""} — {clock}
           </span>
         </div>
 
@@ -1077,7 +1346,7 @@ export default function App() {
           padding: "8px 0 14px",
           boxShadow: "0 10px 24px rgba(0,0,0,.35)",
         }}>
-          {MENU.map(m => {
+          {visibleMenu.map(m => {
             const active = tab === m.id;
             return (
               <button
@@ -1179,6 +1448,7 @@ export default function App() {
                     <option value="courier">Курьер</option>
                     <option value="cargo">Грузоперевозки</option>
                     <option value="master">Мастера</option>
+                    <option value="tech_help">Автотехпомощь</option>
                   </select>
                 </label>
               </div>
@@ -1230,6 +1500,152 @@ export default function App() {
                   {title}
                 </a>
               ))}
+            </div>
+
+            {/* Создание заказа за клиента — работает и у админа, и у оператора */}
+            <div style={{ ...card, marginBottom: 12 }}>
+              <div style={{ fontWeight: 850, fontSize: 16, marginBottom: 10 }}>
+                Создать заказ за клиента
+              </div>
+              <form
+                onSubmit={createForClient}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                  gap: 12,
+                  alignItems: "end",
+                }}
+              >
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Клиент
+                  <select
+                    value={createForm.client_id}
+                    onChange={e => setCreateForm(f => ({ ...f, client_id: e.target.value }))}
+                    style={{ ...input, marginTop: 6, appearance: "auto" }}
+                  >
+                    <option value="">Выберите…</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name || `ID ${c.id}`} · {c.phone || c.max_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Услуга
+                  <select
+                    value={createForm.service}
+                    onChange={e => setCreateForm(f => ({ ...f, service: e.target.value }))}
+                    style={{ ...input, marginTop: 6, appearance: "auto" }}
+                  >
+                    <option value="taxi">Такси</option>
+                    <option value="cargo">Грузоперевозки</option>
+                    <option value="tech_help">Автотехпомощь</option>
+                  </select>
+                </label>
+
+                {createForm.service === "tech_help" && (
+                  <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                    Услуга автотехпомощи
+                    <select
+                      value={createForm.tech_key}
+                      onChange={e => setCreateForm(f => ({ ...f, tech_key: e.target.value }))}
+                      style={{ ...input, marginTop: 6, appearance: "auto" }}
+                    >
+                      <option value="jump_start">Прикурить авто — 500 ₽</option>
+                      <option value="tire_inflate">Подкачать колесо — 250 ₽</option>
+                      <option value="diagnostics">Диагностика — 1000 ₽</option>
+                      <option value="tow">Эвакуация — по грузоперевозкам (предзаказ)</option>
+                      <option value="sober_driver">Трезвый водитель — 3× тариф, от 1000 ₽</option>
+                    </select>
+                  </label>
+                )}
+
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Откуда
+                  <input
+                    value={createForm.from_address}
+                    onChange={e => setCreateForm(f => ({ ...f, from_address: e.target.value }))}
+                    placeholder="Адрес подачи"
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Куда
+                  <input
+                    value={createForm.to_address}
+                    onChange={e => setCreateForm(f => ({ ...f, to_address: e.target.value }))}
+                    placeholder="Назначение"
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Расстояние, км
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={createForm.distance_km}
+                    onChange={e => setCreateForm(f => ({ ...f, distance_km: e.target.value }))}
+                    placeholder="0"
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Дата подачи
+                  <input
+                    type="date"
+                    value={createForm.date}
+                    onChange={e => setCreateForm(f => ({ ...f, date: e.target.value }))}
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Время подачи
+                  <input
+                    type="time"
+                    value={createForm.time}
+                    onChange={e => setCreateForm(f => ({ ...f, time: e.target.value }))}
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Комментарий
+                  <input
+                    value={createForm.comment}
+                    onChange={e => setCreateForm(f => ({ ...f, comment: e.target.value }))}
+                    placeholder="Необязательно"
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={creatingOrder}
+                  style={{
+                    ...button, marginTop: 0, marginBottom: 0,
+                    opacity: creatingOrder ? 0.6 : 1,
+                  }}
+                >
+                  {creatingOrder ? "Создаём…" : "Создать заказ"}
+                </button>
+              </form>
+              {createMsg && (
+                <p style={{ marginTop: 10, fontSize: 13.5, fontWeight: 700, color: createErr ? "#d92b45" : "#177e46" }}>
+                  {createMsg}
+                </p>
+              )}
+              {createForm.service === "tech_help" && createForm.tech_key === "tow" && (
+                <p style={{ marginTop: 8, fontSize: 12.5, color: "#b45309" }}>
+                  Эвакуация доступна только как предзаказ — укажите дату и время.
+                </p>
+              )}
             </div>
 
             {orders.length === 0 && (
@@ -1322,6 +1738,57 @@ export default function App() {
                           <strong style={{ marginLeft: "auto", textAlign: "right" }}>{value}</strong>
                         </div>
                       ))}
+
+                      {/* Диспетчеризация: назначение на несоставленный заказ */}
+                      {o.status === "created" && (() => {
+                        const needRole = SERVICE_ROLE[o.service] || "driver";
+                        const pool = executors
+                          .filter(e => e.status === "approved" && e.is_online)
+                          .sort((a, b) =>
+                            Number(b.active_role === needRole) - Number(a.active_role === needRole)
+                          );
+                        return (
+                          <div style={{ marginTop: 14 }}>
+                            <div style={{ fontSize: 13, fontWeight: 750, color: "#55526a", marginBottom: 6 }}>
+                              Диспетчеризация — назначить исполнителя
+                              {pool.length > 0 && (
+                                <span style={{ color: "#77748a", fontWeight: 600 }}>
+                                  {" "}· онлайн: {pool.length}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <select
+                                value={assignPick[o.id] || ""}
+                                onChange={e => setAssignPick(p => ({ ...p, [o.id]: Number(e.target.value) }))}
+                                style={{ ...input, flex: 1, minWidth: 180, marginTop: 0, marginBottom: 0 }}
+                              >
+                                <option value="">Выберите исполнителя…</option>
+                                {pool.map(e => (
+                                  <option key={e.id} value={e.id}>
+                                    {e.name || e.phone || `ID ${e.id}`} · {ROLE_LABELS[e.active_role] || e.active_role || "—"} · ID {e.id}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => assignOrder(o.id)}
+                                disabled={!assignPick[o.id] || assigning === o.id}
+                                style={{
+                                  ...button, marginTop: 0, marginBottom: 0, flexShrink: 0,
+                                  opacity: !assignPick[o.id] || assigning === o.id ? 0.55 : 1,
+                                }}
+                              >
+                                {assigning === o.id ? "Назначаем…" : "Назначить"}
+                              </button>
+                            </div>
+                            {pool.length === 0 && (
+                              <p style={{ fontSize: 12.5, color: "#77748a", margin: "6px 0 0" }}>
+                                Нет исполнителей онлайн с ролью «{ROLE_LABELS[needRole] || needRole}»
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -2080,38 +2547,143 @@ export default function App() {
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
                   <div>
                     <div style={{ fontWeight: 800, fontSize: 14.5 }}>
-                      {m.author_role === "executor" ? `Исполнитель: ${(m.executor_name || "").toUpperCase() || "—"}` : m.author_role === "system" ? "Система" : "Администратор"}
+                      {m.author_role === "client"
+                        ? `Клиент: ${(m.executor_name || "").toUpperCase() || "—"}`
+                        : m.author_role === "executor"
+                          ? `Исполнитель: ${(m.executor_name || "").toUpperCase() || "—"}`
+                          : m.author_role === "system"
+                            ? "Система"
+                            : `Оператор → ${(m.executor_name || "").toUpperCase() || "собеседник"}`}
                     </div>
                     <div style={{ color: "#77748a", fontSize: 12, marginTop: 2 }}>
                       {m.executor_phone || ""} · {m.created_at ? new Date(m.created_at).toLocaleString("ru-RU") : ""}
                     </div>
                   </div>
                   <span style={{
-                    background: m.author_role === "executor" ? "#eaf2fe" : m.author_role === "system" ? "#fff4e5" : "#e6f7ed",
-                    color: m.author_role === "executor" ? "#2c7bf6" : m.author_role === "system" ? "#b45309" : "#177e46",
+                    background: m.author_role === "executor" ? "#eaf2fe" : m.author_role === "client" ? "#e6f7ed" : m.author_role === "system" ? "#fff4e5" : "#eee9ff",
+                    color: m.author_role === "executor" ? "#2c7bf6" : m.author_role === "client" ? "#177e46" : m.author_role === "system" ? "#b45309" : "#6545ed",
                     padding: "4px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 800, flexShrink: 0,
                   }}>
-                    {m.author_role === "executor" ? "от исполнителя" : m.author_role === "system" ? "событие" : "ответ оператора"}
+                    {m.author_role === "executor" ? "от исполнителя" : m.author_role === "client" ? "от клиента" : m.author_role === "system" ? "событие" : "ответ оператора"}
                   </span>
                 </div>
 
                 <p style={{ margin: "10px 0 0", fontSize: 13.5, lineHeight: 1.45 }}>{m.text}</p>
 
-                {m.author_role !== "admin" && (
+                {m.author_role !== "admin" && (m.executor_id || m.client_id) && (
                   <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                     <input
-                      value={replyText[m.executor_id] || ""}
-                      onChange={e => setReplyText(t => ({ ...t, [m.executor_id]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === "Enter") replyTo(m.executor_id, replyText[m.executor_id]); }}
-                      placeholder="Ответить исполнителю…"
+                      value={replyText[peerKey(m)] || ""}
+                      onChange={e => setReplyText(t => ({ ...t, [peerKey(m)]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === "Enter") replyTo(m, replyText[peerKey(m)]); }}
+                      placeholder={m.client_id ? "Ответить клиенту…" : "Ответить исполнителю…"}
                       style={input}
                     />
                     <button
-                      onClick={() => replyTo(m.executor_id, replyText[m.executor_id])}
+                      onClick={() => replyTo(m, replyText[peerKey(m)])}
                       style={{ ...button, marginTop: 0, marginBottom: 0, flexShrink: 0 }}
                     >Ответить</button>
                   </div>
                 )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Управление операторами — только для администратора */}
+        {tab === "operators" && (
+          <div>
+            <div style={card}>
+              <form
+                onSubmit={createOperator}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: 12,
+                  alignItems: "end",
+                }}
+              >
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Логин
+                  <input
+                    value={opForm.login}
+                    onChange={e => setOpForm(f => ({ ...f, login: e.target.value }))}
+                    placeholder="ivanov"
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Пароль
+                  <input
+                    type="text"
+                    value={opForm.password}
+                    onChange={e => setOpForm(f => ({ ...f, password: e.target.value }))}
+                    placeholder="Надёжный пароль"
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+                <label style={{ fontSize: 13, color: "#77748a", fontWeight: 650 }}>
+                  Имя (необязательно)
+                  <input
+                    value={opForm.name}
+                    onChange={e => setOpForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="Иван Иванов"
+                    style={{ ...input, marginTop: 6 }}
+                  />
+                </label>
+                <button type="submit" style={{ ...button, marginTop: 0, marginBottom: 0 }}>
+                  Создать оператора
+                </button>
+              </form>
+              {opMsg && (
+                <p style={{ marginTop: 10, fontSize: 13, color: "#177e46", fontWeight: 700 }}>{opMsg}</p>
+              )}
+            </div>
+
+            {operators.length === 0 && (
+              <div style={{ ...card, textAlign: "center", color: "#77748a" }}>
+                Операторов пока нет — создайте первого
+              </div>
+            )}
+
+            {operators.map(o => (
+              <div key={o.id} style={{
+                ...card, marginBottom: 10,
+                display: "flex", justifyContent: "space-between",
+                alignItems: "center", gap: 10,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: 14.5 }}>
+                    {o.name || o.login}
+                    {!o.is_active && (
+                      <span style={{
+                        marginLeft: 8, fontSize: 11.5, fontWeight: 800,
+                        background: "#ffe9ec", color: "#d92b45",
+                        padding: "3px 9px", borderRadius: 999,
+                      }}>отключён</span>
+                    )}
+                  </div>
+                  <div style={{ color: "#77748a", fontSize: 12.5, marginTop: 2 }}>
+                    логин: {o.login}{o.created_at ? ` · с ${new Date(o.created_at).toLocaleDateString("ru-RU")}` : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button
+                    onClick={() => toggleOperator(o.id)}
+                    style={{
+                      ...button, marginTop: 0, marginBottom: 0,
+                      background: o.is_active ? "#ffe9ec" : "#e6f7ed",
+                      color: o.is_active ? "#d92b45" : "#177e46",
+                    }}
+                  >{o.is_active ? "Отключить" : "Включить"}</button>
+                  <button
+                    onClick={() => deleteOperator(o.id)}
+                    style={{
+                      ...button, marginTop: 0, marginBottom: 0,
+                      background: "#f0f1f5", color: "#d92b45",
+                    }}
+                  >Удалить</button>
+                </div>
               </div>
             ))}
           </div>

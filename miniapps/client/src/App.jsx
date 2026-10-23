@@ -948,18 +948,7 @@ export default function App() {
       )}
 
       {page === "support" && (
-        <div style={{ padding: "16px 16px 24px" }}>
-          <div style={s.listGroup}>
-            <div style={{ padding: 16 }}>
-              <strong style={{ color: t.text, fontSize: 15 }}>Поддержка</strong>
-              <p style={{ color: t.sub, fontSize: 13, margin: "8px 0 14px", lineHeight: 1.5 }}>
-                Оператор поможет создать заказ, разобраться с поездкой
-                и вопросами исполнителя.
-              </p>
-              <button style={s.ctaBig}>Написать оператору</button>
-            </div>
-          </div>
-        </div>
+        <SupportPage s={s} t={t} />
       )}
 
       {page === "info" && (
@@ -1593,6 +1582,126 @@ function TechHelpPage({ s, t, p }) {
           </strong>
         </button>
       ))}
+    </div>
+  );
+}
+
+function SupportPage({ s, t }) {
+  const [items, setItems] = useState(null);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState("");
+  const chatRef = React.useRef(null);
+
+  async function load() {
+    try {
+      const res = await api("/me/support");
+      setItems(Array.isArray(res?.messages) ? res.messages : []);
+    } catch (e) {
+      setErr(e.message || "Не удалось загрузить переписку");
+      setItems(prev => (Array.isArray(prev) ? prev : []));
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const it = setInterval(load, 10000);
+    return () => clearInterval(it);
+  }, []);
+
+  useEffect(() => {
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+  }, [items && items.length]);
+
+  async function send() {
+    const value = text.trim();
+    if (!value || sending) return;
+    setSending(true);
+    setErr("");
+    try {
+      await api("/me/support", { method: "POST", body: { text: value } });
+      setText("");
+      await load();
+    } catch (e) {
+      setErr(e.message || "Не удалось отправить сообщение");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div style={{ padding: "16px 16px 24px" }}>
+      <div style={s.listGroup}>
+        <div style={{ padding: 16 }}>
+          <strong style={{ color: t.text, fontSize: 15 }}>Поддержка</strong>
+          <p style={{ color: t.sub, fontSize: 13, margin: "8px 0 12px", lineHeight: 1.5 }}>
+            Напишите оператору — ответ придёт сюда и в MAX. Поможем с заказом
+            и вопросами поездки.
+          </p>
+
+          <div
+            ref={chatRef}
+            style={{
+              maxHeight: 340, overflowY: "auto", padding: 12, borderRadius: 16,
+              background: t.bg, border: `1px solid ${t.border}`,
+              display: "flex", flexDirection: "column", gap: 8,
+            }}
+          >
+            {items === null && (
+              <p style={{ margin: 0, fontSize: 12.5, color: t.sub, textAlign: "center" }}>
+                Загружаем переписку…
+              </p>
+            )}
+            {items && items.length === 0 && (
+              <p style={{ margin: 0, fontSize: 12.5, color: t.sub, textAlign: "center" }}>
+                Сообщений пока нет — напишите первым.
+              </p>
+            )}
+            {items && items.map(msg => {
+              const mine = msg.author_role === "client";
+              return (
+                <div
+                  key={msg.id}
+                  style={{
+                    alignSelf: mine ? "flex-end" : "flex-start",
+                    maxWidth: "84%",
+                    padding: "9px 12px", borderRadius: 14,
+                    background: mine ? t.accent : t.card,
+                    color: mine ? t.onAccent : t.text,
+                    border: mine ? "none" : `1px solid ${t.border}`,
+                    fontSize: 13, lineHeight: 1.4, wordBreak: "break-word",
+                  }}
+                >
+                  {msg.text}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <input
+              value={text}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") send(); }}
+              placeholder="Сообщение оператору…"
+              style={{ ...s.input, flex: 1, minWidth: 0, marginBottom: 0, boxSizing: "border-box" }}
+            />
+            <button
+              onClick={send}
+              disabled={!text.trim() || sending}
+              style={{
+                padding: "12px 16px", borderRadius: 12, border: 0,
+                background: text.trim() ? t.accent : t.inputBg,
+                color: text.trim() ? t.onAccent : t.sub,
+                fontWeight: 850, cursor: text.trim() ? "pointer" : "default",
+                fontFamily: "inherit", fontSize: 13.5, flexShrink: 0,
+              }}
+            >Отправить</button>
+          </div>
+
+          {err && <div style={{ ...s.errorBox, marginTop: 10 }}>{err}</div>}
+        </div>
+      </div>
     </div>
   );
 }

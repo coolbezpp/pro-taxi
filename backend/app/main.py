@@ -363,6 +363,11 @@ def _client_from_token(db: Session, user: dict):
 
 @app.post("/api/orders")
 def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_current_user)):
+    return _create_order_internal(db, data, _client_from_token(db, user))
+
+
+def _create_order_internal(db: Session, data: OrderIn, client):
+    """Расчёт цены и создание заказа — общий путь для клиента и оператора."""
     service = (data.service or "taxi").strip().lower()
     if service not in ("taxi", "cargo", "tech_help"):
         raise HTTPException(400, "Сервис недоступен")
@@ -440,6 +445,31 @@ def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_cu
     db.refresh(o)
     return o
 
+
+@app.post("/api/admin/orders", status_code=201)
+def admin_create_order(
+    data: OrderIn,
+    staff=Depends(get_staff),
+    db: Session=Depends(get_db),
+):
+    """Оператор/админ создаёт заказ за клиента (диспетчерская)."""
+    client = db.query(models.Client).filter(
+        models.Client.id == int(data.client_id or 0)
+    ).first()
+    if not client:
+        raise HTTPException(404, "Клиент не найден")
+
+    o = _create_order_internal(db, data, client)
+
+    db.add(models.Notification(
+        user_max_id=str(client.max_id),
+        title="Заказ создан оператором",
+        body=f"Оператор оформил для вас заказ №{o.id}: "
+             f"{o.from_address} → {o.to_address or '—'}.",
+    ))
+    db.commit()
+    return o
+
 @app.get("/api/me/orders")
 def my_orders(user=Depends(get_current_user), db: Session=Depends(get_db)):
     """Заказы клиента: чтобы список и текущий заказ переживали перезапуск миниаппа."""
@@ -504,6 +534,64 @@ def set_favorite_title(
     order.favorite_title = title[:120] or None
     db.commit()
     return {"ok": True, "id": order.id, "favorite_title": order.favorite_title}
+
+
+@app.get("/api/me/support")
+def me_support(user=Depends(get_current_user), db: Session=Depends(get_db)):
+    """Чат клиента с поддержкой (оператором) — как у исполнителя."""
+    max_id = _token_max_id(db, user)
+    client = db.query(models.Client).filter(models.Client.max_id == max_id).first()
+    if not client:
+        return {"messages": [], "unread": 0}
+
+    rows = (
+        db.query(models.OperatorMessage)
+        .filter(models.OperatorMessage.client_id == client.id)
+        .order_by(models.OperatorMessage.id.asc())
+        .limit(200)
+        .all()
+    )
+    return {
+        "messages": [{
+            "id": row.id,
+            "author_role": row.author_role,
+            "text": row.text,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        } for row in rows],
+        "unread": sum(
+            1 for row in rows if row.author_role != "client" and not row.is_read
+        ),
+    }
+
+
+@app.post("/api/me/support")
+def me_support_send(
+    data: dict,
+    user=Depends(get_current_user),
+    db: Session=Depends(get_db),
+):
+    """Клиент пишет в поддержку — сообщение уходит в ленту оператора."""
+    text = (data.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "Пустое сообщение")
+    max_id = _token_max_id(db, user)
+    client = db.query(models.Client).filter(models.Client.max_id == max_id).first()
+    if not client:
+        raise HTTPException(403, "Клиент не найден")
+
+    row = models.OperatorMessage(
+        client_id=client.id, author_role="client", text=text[:2000]
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "ok": True,
+        "id": row.id,
+        "author_role": row.author_role,
+        "text": row.text,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 def _client_order(db: Session, order_id: int, user: dict):
@@ -1101,6 +1189,21 @@ def operator_logout(response: Response, request: Request):
     return {"ok": True}
 
 
+@app.get("/api/admin/whoami")
+def admin_whoami(staff=Depends(get_staff), db: Session = Depends(get_db)):
+    """Кто сейчас вошёл: администратор или оператор (для фильтра вкладок)."""
+    if staff.get("role") == "operator":
+        op = db.query(models.Operator).filter(
+            models.Operator.id == staff.get("operator_id")
+        ).first()
+        return {
+            "role": "operator",
+            "login": staff.get("login"),
+            "name": (op.name if op else None) or staff.get("login"),
+        }
+    return {"role": "admin", "name": "Администратор"}
+
+
 class OperatorIn(BaseModel):
     login: str
     password: str | None = None
@@ -1616,7 +1719,7 @@ def executor_available_orders(
 def admin_orders(
     status: str | None = None,
     service: str | None = None,
-    admin=Depends(get_admin),
+    staff=Depends(get_staff),
     db: Session = Depends(get_db),
 ):
     query = db.query(models.Order)
@@ -1644,7 +1747,7 @@ def admin_orders(
 
 
 @app.get("/api/admin/clients/{client_id}/profile")
-def admin_client_profile(client_id: int, admin=Depends(get_admin), db: Session=Depends(get_db)):
+def admin_client_profile(client_id: int, staff=Depends(get_staff), db: Session=Depends(get_db)):
     """Полная карточка клиента для админки: заказы, баланс, избранное."""
     client = db.query(models.Client).filter(models.Client.id == client_id).first()
     if not client:
@@ -1720,7 +1823,7 @@ def admin_notify_client(
 
 
 @app.get("/api/admin/clients")
-def admin_clients(admin=Depends(get_admin), db: Session = Depends(get_db)):
+def admin_clients(staff=Depends(get_staff), db: Session = Depends(get_db)):
     # Клиенты живут в таблице clients (а не users) — там же баланс и телефон
     clients = db.query(models.Client).order_by(models.Client.id.desc()).all()
 
@@ -1734,7 +1837,7 @@ def admin_clients(admin=Depends(get_admin), db: Session = Depends(get_db)):
 
 
 @app.get("/api/admin/executors")
-def admin_executors(admin=Depends(get_admin), db: Session = Depends(get_db)):
+def admin_executors(staff=Depends(get_staff), db: Session = Depends(get_db)):
     executors = db.query(models.Executor).order_by(models.Executor.id.desc()).all()
 
     result = []
@@ -1863,7 +1966,7 @@ def admin_dashboard(
     period: int = 30,
     role: str | None = None,
     district: str | None = None,
-    admin=Depends(get_admin),
+    staff=Depends(get_staff),
     db: Session = Depends(get_db),
 ):
     """Дашборд сервиса: ключевые показатели с выборкой по районам

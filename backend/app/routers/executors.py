@@ -10,12 +10,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import (
-    Executor, ExecutorRole, Order, ExecutorBalanceOp, ExecutorPhotoCheck,
+    Client, Executor, ExecutorRole, Order, ExecutorBalanceOp, ExecutorPhotoCheck,
     Notification, OperatorMessage, ExecutorVehicle, VehicleMaintenance,
     ExecutorSuspension,
 )
 from ..config import settings
-from ..security import bearer_scheme, create_token, get_admin, get_current_executor
+from ..security import bearer_scheme, create_token, get_admin, get_staff, get_current_executor
 from .. import worktime, rating
 from ..services.max_notify import send_max_message
 
@@ -389,22 +389,43 @@ def send_operator_message(
 
 # --- Канал оператора: админка ---
 @router.get("/admin/messages")
-def admin_messages(admin=Depends(get_admin), db: Session = Depends(get_db)):
-    """Лента сообщений от исполнителей и системных событий."""
+def admin_messages(staff=Depends(get_staff), db: Session = Depends(get_db)):
+    """Лента сообщений от клиентов, исполнителей и системных событий."""
     rows = (
         db.query(OperatorMessage)
         .order_by(OperatorMessage.id.desc())
-        .limit(200)
+        .limit(300)
         .all()
     )
+    # Имена и телефоны подтягиваем одним запросом, а не по строке.
+    executor_ids = {r.executor_id for r in rows if r.executor_id}
+    client_ids = {r.client_id for r in rows if r.client_id}
+    executors = {
+        e.id: e for e in db.query(Executor).filter(Executor.id.in_(executor_ids)).all()
+    } if executor_ids else {}
+    clients = {
+        c.id: c for c in db.query(Client).filter(Client.id.in_(client_ids)).all()
+    } if client_ids else {}
+
     items = []
     for row in rows:
-        executor = db.query(Executor).filter(Executor.id == row.executor_id).first()
+        executor = executors.get(row.executor_id) if row.executor_id else None
+        client = clients.get(row.client_id) if row.client_id else None
+        who = executor or client
         items.append({
             "id": row.id,
             "executor_id": row.executor_id,
-            "executor_name": (executor.name if executor else None) or "Исполнитель",
-            "executor_phone": executor.phone if executor else None,
+            "client_id": row.client_id,
+            "executor_name": (executor.name if executor else None) or (
+                client.name if client else None
+            ) or ("Клиент" if row.client_id else "Исполнитель"),
+            "executor_phone": (executor.phone if executor else None) or (
+                client.phone if client else None
+            ),
+            "peer_role": "client" if row.client_id else "executor",
+            "peer_name": (who.name if who else None) or (
+                "Клиент" if row.client_id else "Исполнитель"
+            ),
             "author_role": row.author_role,
             "text": row.text,
             "is_read": bool(row.is_read),
@@ -419,43 +440,66 @@ def admin_messages(admin=Depends(get_admin), db: Session = Depends(get_db)):
 @router.post("/admin/messages")
 def admin_send_message(
     data: OperatorMessageIn,
-    executor_id: int,
-    admin=Depends(get_admin),
+    executor_id: int | None = None,
+    client_id: int | None = None,
+    staff=Depends(get_staff),
     db: Session = Depends(get_db),
 ):
-    """Админ/оператор отвечает исполнителю."""
-    executor = get_executor(db, executor_id)
+    """Админ/оператор отвечает клиенту или исполнителю."""
     text = (data.text or "").strip()
     if not text:
         raise HTTPException(400, "Пустое сообщение")
+    if not executor_id and not client_id:
+        raise HTTPException(400, "Укажите исполнителя или клиента")
 
+    if executor_id:
+        executor = get_executor(db, executor_id)
+        row = OperatorMessage(
+            executor_id=executor.id, author_role="admin", text=text[:2000]
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+        db.add(Notification(
+            user_max_id=str(executor.max_id),
+            title="Сообщение от оператора",
+            body=text[:500],
+        ))
+        db.commit()
+        try:
+            send_max_message(executor.max_id, f"Сообщение от оператора:\n{text[:500]}", bot="executor")
+        except Exception:
+            pass
+        return {"ok": True, "id": row.id}
+
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(404, "Клиент не найден")
     row = OperatorMessage(
-        executor_id=executor.id,
-        author_role="admin",
-        text=text[:2000],
+        client_id=client.id, author_role="admin", text=text[:2000]
     )
     db.add(row)
     db.commit()
     db.refresh(row)
 
     db.add(Notification(
-        user_max_id=str(executor.max_id),
+        user_max_id=str(client.max_id),
         title="Сообщение от оператора",
         body=text[:500],
     ))
     db.commit()
     try:
-        send_max_message(executor.max_id, f"Сообщение от оператора:\n{text[:500]}", bot="executor")
+        send_max_message(client.max_id, f"Сообщение от оператора:\n{text[:500]}", bot="client")
     except Exception:
         pass
-
     return {"ok": True, "id": row.id}
 
 
 @router.put("/admin/messages/{message_id}/read")
 def admin_read_message(
     message_id: int,
-    admin=Depends(get_admin),
+    staff=Depends(get_staff),
     db: Session = Depends(get_db),
 ):
     row = db.query(OperatorMessage).filter(OperatorMessage.id == message_id).first()
@@ -479,7 +523,7 @@ def _system_message(db, executor_id: int, text: str):
 @router.get("/admin/executors/{executor_id}/profile")
 def admin_executor_profile(
     executor_id: int,
-    admin=Depends(get_admin),
+    staff=Depends(get_staff),
     db: Session = Depends(get_db),
 ):
     """Полная карточка исполнителя для админки: смена, баланс, фото-контроли, заказы."""
@@ -959,7 +1003,7 @@ def answer_photo_check(
 
 # --- Фото-контроль со стороны админки ---
 @router.get("/admin/photo-checks")
-def admin_photo_checks(admin=Depends(get_admin), db: Session = Depends(get_db)):
+def admin_photo_checks(staff=Depends(get_staff), db: Session = Depends(get_db)):
     """Список всех проверок с данными исполнителя."""
     rows = (
         db.query(ExecutorPhotoCheck)

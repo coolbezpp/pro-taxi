@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import Ad
-from ..security import get_admin
+from ..security import get_admin, get_staff
 
 router = APIRouter(prefix="/api", tags=["ads"])
 
@@ -188,7 +188,7 @@ def ad_image(ad_id: int, db: Session = Depends(get_db)):
 # --- управление из админки ---
 
 
-@router.get("/admin/ads", dependencies=[Depends(get_admin)])
+@router.get("/admin/ads", dependencies=[Depends(get_staff)])
 def admin_list_ads(db: Session = Depends(get_db)):
     rows = db.query(Ad).order_by(Ad.position.asc(), Ad.id.desc()).all()
     return {"ads": [_ad_to_admin(ad) for ad in rows]}
