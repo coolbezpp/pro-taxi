@@ -1570,11 +1570,20 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
 
       <MaxGroup m={m}>
         <MaxRow m={m} icon={<Icon name="id" size={20} />} label="ID" value={maxId ?? "—"} />
-        <MaxRow m={m} icon={<Icon name="phone" size={20} />} label="Телефон" value={phone || "Не указан"} />
         <MaxRow m={m} icon={<Icon name="star" size={20} />} label="Рейтинг"
           value={`${me.rating_likes ?? 0} / ${me.rating_dislikes ?? 0}`} />
+        <MaxRow m={m} icon={<Icon name="taxi" size={20} />} label="Транспорт"
+          badge={vehicleDue}
+          onClick={onVehicle} />
         <MaxRow m={m} icon={<Icon name="shield" size={20} />} label="Верификация"
           value={STATUS_RU2[me.status] || "На проверке"} />
+      </MaxGroup>
+
+      {/* Роли — вторым блоком: текущая роль и смена */}
+      <MaxGroup m={m}>
+        <MaxRow m={m} icon={<Icon name="truck" size={20} />} label="Текущая роль"
+          value={ROLE_NAMES[activeRole] || "Не выбрана"} />
+        <MaxRow m={m} icon={<Icon name="check" size={20} />} label="Сменить роль" onClick={onChangeRole} />
       </MaxGroup>
 
       {/* Сиреневая строка-приглашение — аналогично «Пригласить друзей» в MAX */}
@@ -1616,9 +1625,6 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
           badge={unread}
           onClick={onNotifications} />
         <MaxRow m={m} icon={<Icon name="camera" size={20} />} label="Фотоконтроль" onClick={onPhotoChecks} />
-        <MaxRow m={m} icon={<Icon name="taxi" size={20} />} label="Мой транспорт"
-          badge={vehicleDue}
-          onClick={onVehicle} />
         <MaxRow m={m} icon={<Icon name="doc" size={20} />} label="Информация" onClick={onInfo} />
         <MaxRow m={m} icon={<Icon name="support" size={20} />} label="Поддержка" onClick={onSupport} />
       </MaxGroup>
@@ -1631,12 +1637,6 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
           value={THEME_RU[setting] || "Системная"}
           onClick={themeCycle}
         />
-      </MaxGroup>
-
-      <MaxGroup m={m}>
-        <MaxRow m={m} icon={<Icon name="truck" size={20} />} label="Текущая роль"
-          value={ROLE_NAMES[activeRole] || "Не выбрана"} />
-        <MaxRow m={m} icon={<Icon name="check" size={20} />} label="Сменить роль" onClick={onChangeRole} />
       </MaxGroup>
     </div>
   );
