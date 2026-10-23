@@ -6,6 +6,7 @@ from ..db import get_db
 from ..models import Order, Executor, ExecutorRole, Client, Rating
 from ..services.max_notify import send_max_message
 from ..services.selforder import self_order_blocked
+from .. import rating as rating_service
 
 router = APIRouter(tags=["order-chain"])
 
@@ -118,6 +119,11 @@ def accept_order(order_id: int, executor_id: int, db: Session = Depends(get_db))
     if order.status != "assigned":
         raise HTTPException(409, "Заказ нельзя принять в текущем статусе")
 
+    # Временное отстранение: низкий рейтинг или решение администратора
+    susp = rating_service.active_suspension(db, executor_id)
+    if susp:
+        raise HTTPException(403, rating_service.suspension_notice(susp))
+
     order.status = "accepted"
     db.add(OrderEvent(order_id=order.id, event="accepted", payload={"executor_id": executor_id}))
     db.commit()
@@ -150,6 +156,30 @@ def executor_orders(executor_id: int, db: Session = Depends(get_db)):
     query = db.query(Order).filter(Order.executor_id == executor_id)
     orders = query.order_by(Order.id.desc()).limit(100).all()
 
+    # Рейтинг клиентов для карточек заказов (одним запросом)
+    client_ids = {o.client_id for o in orders if o.client_id}
+    client_percents = {
+        c.id: (c.rating_percent if c.rating_percent is not None else 100)
+        for c in db.query(Client).filter(Client.id.in_(client_ids)).all()
+    } if client_ids else {}
+
+    # Оценки исполнителя и моменты завершения — для часового окна оценки
+    order_ids = [o.id for o in orders]
+    my_ratings = {
+        r.order_id: r.value
+        for r in db.query(Rating).filter(
+            Rating.order_id.in_(order_ids),
+            Rating.author_id == executor_id,
+        ).all()
+    } if order_ids else {}
+    completed_map = {
+        e.order_id: e.created_at
+        for e in db.query(OrderEvent).filter(
+            OrderEvent.order_id.in_(order_ids),
+            OrderEvent.event == "completed",
+        ).order_by(OrderEvent.id.asc()).all()
+    } if order_ids else {}
+
     return [{
         "id": o.id,
         "status": o.status,
@@ -160,5 +190,10 @@ def executor_orders(executor_id: int, db: Session = Depends(get_db)):
         "total_price": o.total_price,
         "client_id": o.client_id,
         "executor_id": o.executor_id,
-        "rated": db.query(Rating).filter_by(order_id=o.id, author_id=executor_id).first() is not None,
+        "client_rating": client_percents.get(o.client_id),
+        "rated": o.id in my_ratings,
+        "rated_value": my_ratings.get(o.id),
+        "completed_at": (
+            completed_map[o.id].isoformat() if completed_map.get(o.id) else None
+        ),
     } for o in orders]

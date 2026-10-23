@@ -218,6 +218,10 @@ class Executor(Base):
     balance = Column(Float, nullable=False, default=0)
     rating_likes = Column(Integer, nullable=False, default=0)
     rating_dislikes = Column(Integer, nullable=False, default=0)
+    # Рейтинг «батареей»: процент like за последние 100 оценённых заказов
+    rating_percent = Column(Integer, nullable=True, default=100)
+    # Последний порог, о котором уведомляли (3 — 80%, 2 — 60%, 1 — 50%)
+    rating_notified_level = Column(Integer, nullable=True)
     # На линии / снят с линии (в том числе автоматически за пропуск заказов)
     is_online = Column(Boolean, nullable=False, default=False)
     # Сколько заказов подряд пропущено (два подряд — автоснятие с линии)
@@ -297,7 +301,27 @@ class Client(Base):
     name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     balance = Column(Float, default=0)
+    # Рейтинг «батареей»: процент like за последние 100 оценённых заказов
+    rating_percent = Column(Integer, nullable=True, default=100)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ExecutorSuspension(Base):
+    """Временное отстранение исполнителя от заказов: авто (низкий рейтинг)
+    или вручную администратором. Пока активно — назначение/приём заказов
+    и выход на линию заблокированы; уже назначенные поездки завершить можно."""
+    __tablename__ = "executor_suspensions"
+
+    id = Column(Integer, primary_key=True)
+    executor_id = Column(Integer, index=True, nullable=False)
+    starts_at = Column(DateTime, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    reason = Column(Text, nullable=True)
+    source = Column(String, nullable=False, default="admin")   # auto, admin
+    created_by = Column(String, nullable=True)                 # имя админа или system
+    created_at = Column(DateTime, server_default=func.now())
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(String, nullable=True)
 
 
 class TariffCityZone(Base):

@@ -12,10 +12,11 @@ from ..db import get_db
 from ..models import (
     Executor, ExecutorRole, Order, ExecutorBalanceOp, ExecutorPhotoCheck,
     Notification, OperatorMessage, ExecutorVehicle, VehicleMaintenance,
+    ExecutorSuspension,
 )
 from ..config import settings
 from ..security import bearer_scheme, create_token, get_admin, get_current_executor
-from .. import worktime
+from .. import worktime, rating
 from ..services.max_notify import send_max_message
 
 router = APIRouter(prefix="/api", tags=["executors"])
@@ -315,6 +316,10 @@ def executor_profile(db: Session, executor: Executor):
         "balance": float(executor.balance or 0),
         "rating_likes": int(executor.rating_likes or 0),
         "rating_dislikes": int(executor.rating_dislikes or 0),
+        # Рейтинг «батареей»: процент like за последние 100 оценённых заказов
+        "rating_percent": executor.rating_percent if executor.rating_percent is not None else 100,
+        # Действующее отстранение от заказов (низкий рейтинг / администратор)
+        "suspension": rating.suspension_json(rating.active_suspension(db, executor.id)),
         "is_online": bool(executor.is_online),
         "skip_streak": int(executor.skip_streak or 0),
     }
@@ -506,6 +511,10 @@ def admin_executor_profile(
         VehicleMaintenance.executor_id == executor_id
     ).order_by(VehicleMaintenance.id.desc()).all()
 
+    suspensions = db.query(ExecutorSuspension).filter(
+        ExecutorSuspension.executor_id == executor_id
+    ).order_by(ExecutorSuspension.id.desc()).limit(20).all()
+
     return {
         "executor": {
             "id": executor.id,
@@ -533,6 +542,9 @@ def admin_executor_profile(
             "created_at": op.created_at.isoformat() if op.created_at else None,
         } for op in ops],
         "photo_checks": [_photo_check_json(p) for p in photos],
+        # Рейтинг «батареей» и история отстранений от заказов
+        "rating": rating.executor_rating(db, executor),
+        "suspensions": [rating.suspension_json(s) for s in suspensions],
         "vehicle": _vehicle_json(vehicle) if vehicle else None,
         "maintenance": [
             _maintenance_json(m, int(vehicle.mileage or 0) if vehicle else 0)
@@ -744,10 +756,14 @@ def set_online(
     """Исполнитель выходит на линию / уходит с неё."""
     _require_same(executor, executor_id)
     value = bool(data.get("online", False))
-    executor.is_online = value
     if value:
+        # Отстранение блокирует и выход на линию — заказы всё равно не придут
+        susp = rating.active_suspension(db, executor_id)
+        if susp:
+            raise HTTPException(403, rating.suspension_notice(susp))
         # Вернулся на линию — счётчик пропусков обнуляем
         executor.skip_streak = 0
+    executor.is_online = value
     db.commit()
     return {"ok": True, "is_online": executor.is_online, "skip_streak": executor.skip_streak}
 
@@ -1286,6 +1302,62 @@ def admin_set_vehicle(
     return _vehicle_json(vehicle)
 
 
+class AdminSuspensionIn(BaseModel):
+    hours: int = 24
+    reason: str | None = None
+
+
+@router.post("/admin/executors/{executor_id}/suspensions")
+def admin_suspend_executor(
+    executor_id: int,
+    data: AdminSuspensionIn,
+    admin=Depends(get_admin),
+    db: Session = Depends(get_db),
+):
+    """Ручное временное отстранение исполнителя от заказов."""
+    executor = get_executor(db, executor_id)
+    now = datetime.utcnow()
+    suspension = ExecutorSuspension(
+        executor_id=executor_id,
+        starts_at=now,
+        ends_at=now + timedelta(hours=max(1, min(int(data.hours or 24), 24 * 30))),
+        reason=(data.reason or "").strip() or "Отстранение администратором",
+        source="admin",
+        created_by="admin",
+    )
+    db.add(suspension)
+    executor.is_online = False
+    db.add(Notification(
+        user_max_id=str(executor.max_id),
+        title="Отстранение от заказов",
+        body=f"Вы отстранены от новых заказов до {suspension.ends_at.strftime('%d.%m %H:%M')}. "
+             f"Причина: {suspension.reason}. Уже назначенные поездки завершить можно.",
+        category="quality",
+    ))
+    db.commit()
+    return rating.suspension_json(suspension)
+
+
+@router.post("/admin/executors/{executor_id}/suspensions/{suspension_id}/revoke")
+def admin_revoke_suspension(
+    executor_id: int,
+    suspension_id: int,
+    admin=Depends(get_admin),
+    db: Session = Depends(get_db),
+):
+    """Досрочное снятие отстранения."""
+    suspension = db.query(ExecutorSuspension).filter(
+        ExecutorSuspension.id == suspension_id,
+        ExecutorSuspension.executor_id == executor_id,
+    ).first()
+    if not suspension:
+        raise HTTPException(404, "Отстранение не найдено")
+    suspension.revoked_at = datetime.utcnow()
+    suspension.revoked_by = "admin"
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/executors/{executor_id}/roles")
 def add_role(
     executor_id: int,
@@ -1331,6 +1403,9 @@ def can_accept(
 ):
     _require_same(executor, executor_id)
     executor = get_executor(db, executor_id)
+    susp = rating.active_suspension(db, executor_id)
+    if susp:
+        return {"allowed": False, "reason": rating.suspension_notice(susp)}
     if role not in executor_roles(db, executor_id):
         return {"allowed": False, "reason": "Роль не добавлена"}
     active = has_active_order(db, executor_id)

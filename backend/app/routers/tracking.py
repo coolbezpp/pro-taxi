@@ -181,6 +181,7 @@ def track_order(
                 "name": executor.name or "Исполнитель",
                 "rating_likes": int(executor.rating_likes or 0),
                 "rating_dislikes": int(executor.rating_dislikes or 0),
+                "rating_percent": executor.rating_percent if executor.rating_percent is not None else 100,
                 "lat": executor.last_lat,
                 "lon": executor.last_lon,
                 "updated_at": executor.last_seen_at.isoformat() if executor.last_seen_at else None,

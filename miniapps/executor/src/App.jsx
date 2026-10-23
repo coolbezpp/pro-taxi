@@ -295,6 +295,35 @@ function MaxRow({ m, icon, label, value, onClick, danger, accent, badge }) {
   return onClick ? <button style={row} onClick={onClick}>{body}</button> : <div style={row}>{body}</div>;
 }
 
+// Рейтинг в виде заряжающейся батареи: изначально 100%, каждая оценка
+// за последние 100 заказов двигает заряд. Цветовая индикация: зелёный
+// (80–100%), жёлтый (60–79%), оранжевый (40–59%), красный (<40%).
+function RatingBattery({ value = 100, w = 52 }) {
+  const v = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const color = v >= 80 ? "#17b26a" : v >= 60 ? "#f5b400" : v >= 40 ? "#f97316" : "#ff3b5d";
+  const h = Math.round(w * 0.5);
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        <span style={{
+          width: w, height: h, borderRadius: 4, padding: 2, boxSizing: "border-box",
+          border: "1.5px solid rgba(128,132,150,.55)",
+        }}>
+          <span style={{
+            display: "block", height: "100%", width: `${v}%`,
+            background: color, borderRadius: 2, transition: "width .3s",
+          }} />
+        </span>
+        <span style={{
+          width: 3, height: Math.round(h * 0.42), borderRadius: "0 2px 2px 0",
+          background: "rgba(128,132,150,.55)", marginLeft: 1,
+        }} />
+      </span>
+      <strong style={{ fontSize: 12.5, color }}>{v}%</strong>
+    </span>
+  );
+}
+
 // Данные пользователя из MAX (initData: user = {id, first_name, photo_url})
 function readMaxUser() {
   try {
@@ -907,6 +936,16 @@ function ExecutorVehiclePage({ me, t, m, onBack }) {
   const v = data?.vehicle;
   const items = Array.isArray(data?.maintenance) ? data.maintenance : [];
   const dueCount = Number(data?.maintenance_due_count || 0);
+  // Стандартные работы ТО: выбираются из списка, своё название
+  // можно вписать вручную (поле остаётся свободным)
+  const WORK_TYPES = [
+    "Замена моторного масла",
+    "Замена воздушного фильтра",
+    "Замена свечей зажигания",
+    "Замена тормозных колодок",
+    "Замена масла в трансмиссии",
+    "Замена ремня или цепи ГРМ",
+  ];
   const inputStyle = {
     width: "100%", padding: "11px 12px", borderRadius: 12,
     border: `1px solid ${m.cardAltBorder}`,
@@ -916,7 +955,7 @@ function ExecutorVehiclePage({ me, t, m, onBack }) {
 
   return (
     <div style={{ padding: "14px 16px 30px", background: m.bg, minHeight: "100dvh" }}>
-      <SubPageHeader m={m} title="Мой транспорт" onBack={onBack} />
+      <SubPageHeader m={m} title="Транспорт" onBack={onBack} />
 
       {data?.reminder && (
         <div style={{
@@ -951,9 +990,20 @@ function ExecutorVehiclePage({ me, t, m, onBack }) {
               {v.year ? <span style={{ fontSize: 13, color: m.sub, alignSelf: "center" }}>{v.year} г.в.</span> : null}
               {v.seats ? <span style={{ fontSize: 13, color: m.sub, alignSelf: "center" }}>{v.seats} мест</span> : null}
               <span style={{
-                marginLeft: "auto", alignSelf: "center", fontSize: 11.5, fontWeight: 800,
-                color: v.approved ? t.success : m.sub,
-              }}>{v.approved ? "Проверен" : "На проверке"}</span>
+                marginLeft: "auto", alignSelf: "center",
+                display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3,
+              }}>
+                {/* Значок проверки над подписью: зелёная галочка — проверен,
+                    красный прочерк — ещё на проверке */}
+                <span style={{
+                  fontSize: 16, fontWeight: 900, lineHeight: 1,
+                  color: v.approved ? t.success : t.danger,
+                }}>{v.approved ? "✓" : "—"}</span>
+                <span style={{
+                  fontSize: 11.5, fontWeight: 800,
+                  color: v.approved ? t.success : m.sub,
+                }}>{v.approved ? "Проверен" : "На проверке"}</span>
+              </span>
             </div>
 
             {/* Текущий пробег — по нему считается срок работ по ТО */}
@@ -1040,11 +1090,15 @@ function ExecutorVehiclePage({ me, t, m, onBack }) {
         {/* Добавление работы самим исполнителем */}
         <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
           <input
-            placeholder="Название работы (например, замена масла)"
+            list="maintenance-work-types"
+            placeholder="Название работы: выберите из списка или впишите своё"
             value={form.title}
             onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
             style={inputStyle}
           />
+          <datalist id="maintenance-work-types">
+            {WORK_TYPES.map(w => <option key={w} value={w} />)}
+          </datalist>
           <input
             placeholder="Заметка: сервис, детали (необязательно)"
             value={form.note}
@@ -1568,10 +1622,23 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
         }}>{name}</strong>
       </div>
 
+      {/* Отстранение от заказов: низкий рейтинг или решение администратора */}
+      {me.suspension && (
+        <div style={{
+          marginBottom: 12, padding: 14, borderRadius: 16,
+          background: t.dangerSoft, color: t.danger, fontSize: 13, lineHeight: 1.45,
+        }}>
+          <strong style={{ display: "block", marginBottom: 2 }}>
+            Вы временно отстранены от заказов
+          </strong>
+          До {new Date(me.suspension.ends_at).toLocaleString("ru-RU")}. {me.suspension.reason}
+        </div>
+      )}
+
       <MaxGroup m={m}>
         <MaxRow m={m} icon={<Icon name="id" size={20} />} label="ID" value={maxId ?? "—"} />
         <MaxRow m={m} icon={<Icon name="star" size={20} />} label="Рейтинг"
-          value={`${me.rating_likes ?? 0} / ${me.rating_dislikes ?? 0}`} />
+          value={<RatingBattery value={me.rating_percent ?? 100} w={40} />} />
         <MaxRow m={m} icon={<Icon name="taxi" size={20} />} label="Транспорт"
           badge={vehicleDue}
           onClick={onVehicle} />
@@ -2147,7 +2214,14 @@ export default function App() {
     }
   }
 
-  const rateTarget = myOrders.find(o => o.status === "completed" && !o.rated);
+  // Окно оценки: час после завершения. Внутри него негатив можно
+  // передумать и поставить лайк — положительная оценка финальная.
+  const rateTarget = myOrders.find(o =>
+    o.status === "completed"
+    && o.completed_at
+    && Date.now() - new Date(o.completed_at).getTime() <= 3600e3
+    && (!o.rated || o.rated_value === "dislike")
+  );
   // Активный заказ — для чата с клиентом
   const activeOrder = myOrders.find(o => ["assigned", "accepted", "in_progress"].includes(o.status));
 
@@ -2216,6 +2290,18 @@ export default function App() {
           {page === "home" && me && (
             <>
               {/* Контроль рабочего времени: лимит 12 ч, предупреждение, отдых */}
+              {/* Отстранение от заказов: низкий рейтинг или администратор */}
+              {me.suspension && (
+                <div style={{
+                  marginBottom: 12, padding: 14, borderRadius: 16,
+                  background: t.dangerSoft, color: t.danger, fontSize: 13, lineHeight: 1.45,
+                }}>
+                  <strong style={{ display: "block", marginBottom: 2 }}>
+                    Отстранение от заказов до {new Date(me.suspension.ends_at).toLocaleString("ru-RU")}
+                  </strong>
+                  {me.suspension.reason}. Уже назначенные поездки можно завершить.
+                </div>
+              )}
               <WorkTimeCard work={work} t={t} />
               {/* Сетка статов 2×2 — баланс, доход, статус, рейтинг */}
               <div style={s.statsGrid}>
@@ -2244,10 +2330,10 @@ export default function App() {
                   <span style={s.statLabel}>
                     <Icon name="star" size={12} style={{ display: "inline" }} /> Рейтинг
                   </span>
-                  <strong style={s.statValue((me.rating_likes || 0) >= (me.rating_dislikes || 0))}>
-                    {me.rating_likes ?? 0} / {me.rating_dislikes ?? 0}
+                  <strong style={s.statValue((me.rating_percent ?? 100) >= 60)}>
+                    <RatingBattery value={me.rating_percent ?? 100} w={44} />
                   </strong>
-                  <span style={s.statNote}>лайки / дизлайки</span>
+                  <span style={s.statNote}>по оценкам за 100 заказов</span>
                 </div>
               </div>
 
@@ -2378,15 +2464,18 @@ export default function App() {
                     {rateTarget.from_address} → {rateTarget.to_address}
                   </p>
                   <p style={{ margin: "10px 0 8px", fontWeight: 850, color: t.text }}>
-                    Как был клиент?
+                    {rateTarget.rated ? "Изменить оценку клиента?" : "Как был клиент?"}
                   </p>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button onClick={() => sendRating(rateTarget.id, "like")} style={{ ...s.rateBtn, background: t.successSoft, color: t.success }}>
-                      <RateIcon name="like" /> Понравился
+                      <RateIcon name="like" /> {rateTarget.rated ? "Всё понравилось" : "Понравился"}
                     </button>
-                    <button onClick={() => sendRating(rateTarget.id, "dislike")} style={{ ...s.rateBtn, background: t.dangerSoft, color: t.danger }}>
-                      <RateIcon name="dislike" /> Не понравился
-                    </button>
+                    {/* Дислайк скрыт в режиме изменения: негатив можно только заменить на лайк */}
+                    {!rateTarget.rated && (
+                      <button onClick={() => sendRating(rateTarget.id, "dislike")} style={{ ...s.rateBtn, background: t.dangerSoft, color: t.danger }}>
+                        <RateIcon name="dislike" /> Не понравился
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -2398,7 +2487,15 @@ export default function App() {
                     <strong style={{ color: t.text }}>{o.total_price} ₽</strong>
                   </div>
                   <p style={{ margin: "0 0 6px", color: t.text }}>{o.from_address} → {o.to_address}</p>
-                  <p style={{ margin: "0 0 10px", color: t.sub, fontSize: 12 }}>{STATUS_RU[o.status] || o.status}</p>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <span style={{ color: t.sub, fontSize: 12 }}>{STATUS_RU[o.status] || o.status}</span>
+                    {o.client_rating != null && (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <RatingBattery value={o.client_rating} w={34} />
+                        <span style={{ fontSize: 11, color: t.sub }}>клиент</span>
+                      </span>
+                    )}
+                  </div>
 
                   {o.status === "assigned" && (
                     <button onClick={() => acceptAssigned(o.id)} style={s.primary}>Я на месте</button>

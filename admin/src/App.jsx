@@ -4,6 +4,175 @@ import { useEffect, useState } from "react";
 const API = "/api";
 const PURPLE = "#6545ed";
 
+// Рейтинг в виде заряжающейся батареи (как в миниапах): изначально 100%,
+// цвет — зелёный ≥80, жёлтый 60–79, оранжевый 40–59, красный <40.
+function RatingBattery({ value = 100, w = 44 }) {
+  const v = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const color = v >= 80 ? "#17b26a" : v >= 60 ? "#f5b400" : v >= 40 ? "#f97316" : "#ff3b5d";
+  const h = Math.round(w * 0.5);
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        <span style={{
+          width: w, height: h, borderRadius: 4, padding: 2, boxSizing: "border-box",
+          border: "1.5px solid rgba(128,132,150,.55)",
+        }}>
+          <span style={{
+            display: "block", height: "100%", width: `${v}%`,
+            background: color, borderRadius: 2, transition: "width .3s",
+          }} />
+        </span>
+        <span style={{
+          width: 3, height: Math.round(h * 0.42), borderRadius: "0 2px 2px 0",
+          background: "rgba(128,132,150,.55)", marginLeft: 1,
+        }} />
+      </span>
+      <strong style={{ fontSize: 12.5, color }}>{v}%</strong>
+    </span>
+  );
+}
+
+// Отстранение от заказов: активное, выдача вручную и история.
+// Автоматические (<50% рейтинга) создаёт система — здесь видны все.
+function SuspensionPanel({ profileId, profile, reload }) {
+  const [hours, setHours] = useState(24);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const suspensions = profile.suspensions || [];
+  const active = suspensions.find(s =>
+    !s.revoked_at && s.ends_at && new Date(s.ends_at).getTime() > Date.now()
+  );
+
+  async function post(path, body) {
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await fetch(`${API}${path}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Ошибка");
+      await reload();
+    } catch (e) {
+      setErr(e.message || "Не удалось выполнить действие");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const smallBtn = {
+    padding: "9px 14px", borderRadius: 10, border: 0, cursor: "pointer",
+    fontSize: 13, fontWeight: 800, fontFamily: "inherit",
+    background: "#ffe9ec", color: "#d92b45",
+  };
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontWeight: 800, fontSize: 15 }}>Отстранение от заказов</div>
+
+      {active ? (
+        <div style={{
+          marginTop: 8, padding: 12, borderRadius: 12,
+          background: "#ffe9ec", border: "1px solid #ffb8c2",
+        }}>
+          <div style={{ fontWeight: 800, color: "#d92b45", fontSize: 13.5 }}>
+            Активно до {new Date(active.ends_at).toLocaleString("ru-RU")}
+          </div>
+          <div style={{ fontSize: 12.5, color: "#55525f", marginTop: 4 }}>
+            {active.reason} · {active.source === "auto" ? "автоматически (низкий рейтинг)" : "вручную"}
+          </div>
+          <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#77748a" }}>
+              Новые заказы, назначение и выход на линию заблокированы.
+            </span>
+            <button
+              onClick={() => post(`/admin/executors/${profileId}/suspensions/${active.id}/revoke`)}
+              disabled={busy}
+              style={{ ...smallBtn, marginLeft: "auto" }}
+            >{busy ? "…" : "Снять отстранение"}</button>
+          </div>
+        </div>
+      ) : (
+        <p style={{ margin: "6px 0 0", fontSize: 12.5, color: "#77748a" }}>
+          Отстранений нет — исполнитель может брать заказы.
+        </p>
+      )}
+
+      {/* Выдача отстранения вручную */}
+      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select
+          value={hours}
+          onChange={e => setHours(Number(e.target.value))}
+          style={{
+            padding: "9px 11px", borderRadius: 10, border: "1px solid #e2dff0",
+            fontSize: 13.5, fontFamily: "inherit", background: "#fff",
+          }}
+        >
+          <option value={24}>24 часа</option>
+          <option value={72}>72 часа</option>
+          <option value={168}>7 дней</option>
+        </select>
+        <input
+          placeholder="Причина (необязательно)"
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          style={{
+            flex: "1 1 180px", padding: "9px 11px", borderRadius: 10,
+            border: "1px solid #e2dff0", fontSize: 13.5, fontFamily: "inherit",
+          }}
+        />
+        <button
+          onClick={() => post(`/admin/executors/${profileId}/suspensions`, {
+            hours, reason: reason.trim() || null,
+          })}
+          disabled={busy}
+          style={{
+            padding: "9px 14px", borderRadius: 10, border: 0, cursor: "pointer",
+            fontSize: 13, fontWeight: 800, fontFamily: "inherit",
+            background: "#d92b45", color: "#fff", opacity: busy ? 0.6 : 1,
+          }}
+        >{busy ? "…" : "Отстранить"}</button>
+      </div>
+      {err && <div style={{ marginTop: 6, fontSize: 12.5, color: "#d92b45" }}>{err}</div>}
+
+      {/* История отстранений */}
+      {suspensions.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          {suspensions.map(s => {
+            const live = !s.revoked_at && s.ends_at && new Date(s.ends_at).getTime() > Date.now();
+            return (
+              <div key={s.id} style={{
+                display: "flex", justifyContent: "space-between", gap: 8,
+                padding: "7px 0", borderBottom: "1px solid #eeecf3", fontSize: 12.5,
+              }}>
+                <span>
+                  <strong>{s.source === "auto" ? "Авто" : "Админ"}</strong>
+                  {" · "}{new Date(s.starts_at).toLocaleString("ru-RU")} →{" "}
+                  {new Date(s.ends_at).toLocaleString("ru-RU")}
+                  <small style={{ display: "block", color: "#9a97ab", fontSize: 11.5, marginTop: 2 }}>
+                    {s.reason}
+                  </small>
+                </span>
+                <span style={{
+                  alignSelf: "center", whiteSpace: "nowrap", fontWeight: 700,
+                  fontSize: 11.5, color: s.revoked_at ? "#177e46" : live ? "#d92b45" : "#9a97ab",
+                }}>
+                  {s.revoked_at ? "снято" : live ? "действует" : "истекло"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Иконки в едином штриховом стиле (как в миниаппах «Про»)
 const ICON_PATHS = {
   home: (
@@ -1222,6 +1391,9 @@ export default function App() {
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontWeight: 850, fontSize: 17 }}>{e.balance} ₽</div>
                     <div style={{ color: "#77748a", fontSize: 12 }}>баланс</div>
+                    <div style={{ marginTop: 4 }}>
+                      <RatingBattery value={e.rating_percent ?? 100} w={40} />
+                    </div>
                   </div>
                 </div>
 
@@ -1779,7 +1951,14 @@ export default function App() {
                     {[
                       ["Баланс", `${profile.executor.balance} ₽`],
                       ["На линии", profile.executor.is_online ? "да" : "нет"],
-                      ["Рейтинг", `${profile.executor.rating_likes} / ${profile.executor.rating_dislikes}`],
+                      ["Рейтинг", (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          <RatingBattery value={profile.rating?.percent ?? 100} w={44} />
+                          <span style={{ fontSize: 12, color: "#77748a" }}>
+                            {profile.rating?.likes ?? 0} 👍 / {profile.rating?.dislikes ?? 0} 👎
+                          </span>
+                        </span>
+                      )],
                       ["Верификация", profile.executor.status === "approved" ? "пройдена" : profile.executor.status],
                       ["Пропусков подряд", String(profile.executor.skip_streak || 0)],
                       ["Роли", (profile.executor.roles || []).join(", ") || "—"],
@@ -1808,6 +1987,13 @@ export default function App() {
                         : " Смена не начата."}
                     </p>
                   </div>
+
+                  {/* Отстранение: активное, выдача и история */}
+                  <SuspensionPanel
+                    profileId={profileId}
+                    profile={profile}
+                    reload={() => openExecutorProfile(profileId)}
+                  />
 
                   {/* Транспорт: заполняет админ, данные уходят клиенту при заказе */}
                   <div style={{ marginTop: 16 }}>

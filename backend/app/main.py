@@ -4,10 +4,10 @@ from fastapi import Cookie, Response
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.config import settings
 from app.db import get_db
-from app import models, pricing, worktime
+from app import models, pricing, worktime, rating
 from app.security import create_token, hash_password, verify_password, get_current_user
 from pydantic import BaseModel
 app=FastAPI(title="Pro API")
@@ -480,11 +480,31 @@ def _client_order(db: Session, order_id: int, user: dict):
     return order
 
 
+def _completed_at(db, order):
+    """Момент завершения заказа — из события completed.
+
+    По нему живут часовые окна: оценка поездки и чат/«Оставили вещи»
+    после завершения.
+    """
+    event = db.query(models.OrderEvent).filter(
+        models.OrderEvent.order_id == order.id,
+        models.OrderEvent.event == "completed",
+    ).order_by(models.OrderEvent.id.desc()).first()
+    return event.created_at if event else None
+
+
 @app.get("/api/orders/{order_id}")
 def get_order(order_id:int, db: Session=Depends(get_db)):
     o=db.query(models.Order).get(order_id)
     if not o: raise HTTPException(404)
-    return o
+    payload = {c.name: getattr(o, c.name) for c in o.__table__.columns}
+    done = _completed_at(db, o)
+    payload["completed_at"] = done.isoformat() if done else None
+    payload["lost_item"] = db.query(models.OrderEvent).filter(
+        models.OrderEvent.order_id == o.id,
+        models.OrderEvent.event == "lost_item",
+    ).first() is not None
+    return payload
 
 
 @app.get("/api/orders/{order_id}/share/{share_code}")
@@ -601,6 +621,11 @@ def assign(order_id:int, executor_id:int, db: Session=Depends(get_db)):
 
     if executor.status != "approved":
         raise HTTPException(403, "Исполнитель не прошёл верификацию")
+
+    # Временное отстранение: низкий рейтинг или решение администратора
+    susp = rating.active_suspension(db, executor_id)
+    if susp:
+        raise HTTPException(403, rating.suspension_notice(susp))
 
     # Анти-самозаказы: заказ на тот же номер телефона, что у исполнителя — нельзя
     so = self_order_blocked(db, o, executor)
@@ -789,6 +814,11 @@ def rate(
     if o.status != "completed":
         raise HTTPException(400, "Оценить можно только завершённый заказ")
 
+    # Окно оценки: сразу после завершения и в течение часа после него
+    done_at = _completed_at(db, o)
+    if done_at and datetime.utcnow() - done_at > timedelta(hours=1):
+        raise HTTPException(403, "Оценить заказ можно только в течение часа после завершения")
+
     author_id = None
     kind = None          # client | executor
     target_id = None
@@ -823,7 +853,31 @@ def rate(
         order_id=o.id, author_id=author_id
     ).first()
     if existing:
-        raise HTTPException(409, "Оценка уже оставлена")
+        # Негатив в течение часа можно передумать и поставить лайк;
+        # положительную оценку изменить нельзя.
+        if not (existing.value == "dislike" and data.value == "like"):
+            raise HTTPException(
+                409,
+                "Положительную оценку изменить нельзя"
+                if existing.value == "like"
+                else "Оценка уже оставлена",
+            )
+        existing.value = "like"
+        existing.comment = data.comment
+        quality = None
+        if kind == "client" and target_executor:
+            target_executor.rating_likes = (target_executor.rating_likes or 0) + 1
+            target_executor.rating_dislikes = max(0, (target_executor.rating_dislikes or 0) - 1)
+            quality = rating.update_executor_rating(db, target_executor)
+        elif kind == "executor":
+            rated_client = db.query(models.Client).get(target_id)
+            if rated_client:
+                quality = rating.update_client_rating(db, rated_client)
+        db.commit()
+        result = {"ok": True, "by": kind, "target_id": target_id, "changed": True}
+        if quality:
+            result["rating"] = {"percent": quality["percent"]}
+        return result
 
     db.add(models.Rating(
         order_id=o.id,
@@ -833,6 +887,7 @@ def rate(
         comment=data.comment,
     ))
 
+    quality = None
     if kind == "client" and target_executor:
         counter = "rating_likes" if data.value == "like" else "rating_dislikes"
         setattr(
@@ -840,9 +895,84 @@ def rate(
             counter,
             (getattr(target_executor, counter) or 0) + 1,
         )
+        # Рейтинг «батареей»: пересчёт процента, уведомления о качестве
+        # и, при падении ниже 50%, временное отстранение от заказов
+        quality = rating.update_executor_rating(db, target_executor)
+    elif kind == "executor":
+        rated_client = db.query(models.Client).get(target_id)
+        if rated_client:
+            quality = rating.update_client_rating(db, rated_client)
 
     db.commit()
-    return {"ok": True, "by": kind, "target_id": target_id}
+    result = {"ok": True, "by": kind, "target_id": target_id}
+    if quality:
+        result["rating"] = {"percent": quality["percent"]}
+    return result
+
+
+@app.post("/api/orders/{order_id}/lost-item")
+def lost_item(order_id: int, request: Request, db: Session = Depends(get_db)):
+    """Клиент сообщил, что оставил вещи в автомобиле (услуга такси).
+
+    Кнопка живёт в карточке заказа в течение часа после завершения:
+    уведомляем исполнителя и оператора.
+    """
+    o = db.query(models.Order).get(order_id)
+    if not o:
+        raise HTTPException(404, "Заказ не найден")
+    if (o.service or "taxi") != "taxi":
+        raise HTTPException(400, "Кнопка доступна только для услуг такси")
+    if o.status != "completed":
+        raise HTTPException(409, "Кнопка доступна после завершения заказа")
+    done_at = _completed_at(db, o)
+    if done_at and datetime.utcnow() - done_at > timedelta(hours=1):
+        raise HTTPException(403, "Сообщить о вещах можно в течение часа после завершения")
+
+    user = _optional_user(request.headers.get("Authorization", ""))
+    if not user:
+        raise HTTPException(401, "Требуется авторизация")
+    max_id = _token_max_id(db, user)
+    client = db.query(models.Client).filter_by(max_id=max_id).first()
+    if not client or o.client_id != client.id:
+        raise HTTPException(403, "Этот заказ вам не принадлежит")
+
+    already = db.query(models.OrderEvent).filter(
+        models.OrderEvent.order_id == o.id,
+        models.OrderEvent.event == "lost_item",
+    ).first()
+    if already:
+        raise HTTPException(409, "Сообщение об оставленных вещах уже отправлено")
+
+    db.add(models.OrderEvent(
+        order_id=o.id, event="lost_item", payload={"client_id": client.id},
+    ))
+    executor = db.query(models.Executor).get(o.executor_id) if o.executor_id else None
+    if executor:
+        db.add(models.Notification(
+            user_max_id=str(executor.max_id),
+            title="Клиент оставил вещи",
+            body=f"Клиент сообщил, что оставил вещи в заказе №{o.id}. "
+                 "Свяжитесь с ним через чат заказа.",
+            order_id=o.id,
+            category="order",
+        ))
+        # Лента оператора: помочь связаться, если чат молчит
+        db.add(models.OperatorMessage(
+            executor_id=executor.id,
+            author_role="system",
+            text=f"Клиент оставил вещи в заказе №{o.id} "
+                 f"({o.from_address} → {o.to_address}). Связаться с клиентом.",
+        ))
+        try:
+            send_max_message(
+                executor.max_id,
+                f"Клиент оставил вещи в заказе №{o.id}. Откройте чат заказа и свяжитесь с клиентом.",
+                bot="executor",
+            )
+        except Exception:
+            pass
+    db.commit()
+    return {"ok": True}
 
 # --- admin ---
 # Сессия администратора: случайный одноразовый токен в памяти процесса,
@@ -1053,12 +1183,15 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
             rated = db.query(models.Rating).filter_by(
                 order_id=completed.id, author_id=client.id
             ).first()
+            done_at = _completed_at(db, completed)
             last_completed = {
                 "id": completed.id,
                 "service": completed.service,
                 "from_address": completed.from_address,
                 "to_address": completed.to_address,
                 "rated": bool(rated),
+                "rated_value": rated.value if rated else None,
+                "completed_at": done_at.isoformat() if done_at else None,
             }
 
     if executor:
@@ -1087,13 +1220,24 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
             rated = db.query(models.Rating).filter_by(
                 order_id=completed.id, author_id=executor.id
             ).first()
+            done_at = _completed_at(db, completed)
             last_completed = {
                 "id": completed.id,
                 "service": completed.service,
                 "from_address": completed.from_address,
                 "to_address": completed.to_address,
                 "rated": bool(rated),
+                "rated_value": rated.value if rated else None,
+                "completed_at": done_at.isoformat() if done_at else None,
             }
+
+    # Рейтинг «батареей»: процент по оценкам за последние 100 заказов
+    if client:
+        rp = client.rating_percent if client.rating_percent is not None else 100
+    elif executor:
+        rp = executor.rating_percent if executor.rating_percent is not None else 100
+    else:
+        rp = 100
 
     return {
         "id": client.id if client else (executor.id if executor else None),
@@ -1104,6 +1248,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
         "client_balance": client.balance if client else 0,
         "executor_balance": executor.balance if executor else 0,
         "executor_status": executor.status if executor else None,
+        "rating_percent": rp,
         "active_order": active_order,
         "last_completed": last_completed,
     }
@@ -1461,6 +1606,7 @@ def admin_executors(admin=Depends(get_admin), db: Session = Depends(get_db)):
             "balance": e.balance,
             "is_online": bool(e.is_online),
             "skip_streak": int(e.skip_streak or 0),
+            "rating_percent": e.rating_percent if e.rating_percent is not None else 100,
             "work": work,
             "last_seen_at": e.last_seen_at.isoformat() if e.last_seen_at else None,
         })

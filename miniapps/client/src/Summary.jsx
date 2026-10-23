@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api.js";
 import { useTheme } from "./theme.js";
+import { RatingBattery } from "./OrderSearch.jsx";
 
 // Штриховые SVG-иконки в едином стиле приложения.
 const LIKE_PATH = (
@@ -103,6 +104,10 @@ export function ProfileBalance() {
       <p style={{ margin: "6px 0", fontSize: 24, fontWeight: 900, color: t.text }}>
         Баланс: {balance} ₽
       </p>
+      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
+        <RatingBattery value={summary.rating_percent ?? 100} />
+        <span style={{ fontSize: 12.5, color: t.sub }}>Ваш рейтинг</span>
+      </div>
     </div>
   );
 }
@@ -110,6 +115,9 @@ export function ProfileBalance() {
 // Карточка оценки последнего завершённого заказа.
 // Показывается, пока поездка не оценена второй стороной.
 function RatingCard({ rate, busyRate, onRate, t }) {
+  // Негатив в течение часа после завершения можно передумать на лайк;
+  // положительная оценка финальная — кнопки дислайка в этом режиме нет.
+  const changeMode = rate.rated_value === "dislike";
   return (
     <div style={{
       padding: 16,
@@ -123,7 +131,9 @@ function RatingCard({ rate, busyRate, onRate, t }) {
       <p style={{ margin: "6px 0 0", color: t.sub, fontSize: 13 }}>
         {rate.from_address} → {rate.to_address}
       </p>
-      <p style={{ margin: "10px 0 8px", fontWeight: 800, color: t.text }}>Как всё прошло?</p>
+      <p style={{ margin: "10px 0 8px", fontWeight: 800, color: t.text }}>
+        {changeMode ? "Изменить оценку?" : "Как всё прошло?"}
+      </p>
 
       <div style={{ display: "flex", gap: 10 }}>
         <button
@@ -136,20 +146,22 @@ function RatingCard({ rate, busyRate, onRate, t }) {
             opacity: busyRate ? 0.6 : 1,
           }}
         >
-          <MiniIcon path={LIKE_PATH} /> Понравилось
+          <MiniIcon path={LIKE_PATH} /> {changeMode ? "Всё хорошо" : "Понравилось"}
         </button>
-        <button
-          onClick={() => onRate("dislike")}
-          disabled={busyRate}
-          style={{
-            flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 8, padding: 12, borderRadius: 12, border: 0, cursor: "pointer",
-            background: t.dangerSoft, color: t.danger, fontWeight: 800,
-            opacity: busyRate ? 0.6 : 1,
-          }}
-        >
-          <MiniIcon path={DISLIKE_PATH} /> Не понравилось
-        </button>
+        {!changeMode && (
+          <button
+            onClick={() => onRate("dislike")}
+            disabled={busyRate}
+            style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+              gap: 8, padding: 12, borderRadius: 12, border: 0, cursor: "pointer",
+              background: t.dangerSoft, color: t.danger, fontWeight: 800,
+              opacity: busyRate ? 0.6 : 1,
+            }}
+          >
+            <MiniIcon path={DISLIKE_PATH} /> Не понравилось
+          </button>
+        )}
       </div>
     </div>
   );
