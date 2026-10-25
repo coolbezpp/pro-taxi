@@ -1194,6 +1194,13 @@ function formatMinutes(minutes) {
 }
 
 function WorkTimeCard({ work, t }) {
+  // Живой обратный отсчёт: тикаем локально, не дожидаясь опроса работы (60 с)
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    const it = setInterval(() => setTick(Date.now()), 30000);
+    return () => clearInterval(it);
+  }, []);
+
   if (!work) return null;
 
   const limit = work.limit_minutes || 720;
@@ -1207,22 +1214,35 @@ function WorkTimeCard({ work, t }) {
   const accent = blocked ? t.danger : warning ? t.amber : t.accent;
   const softBg = blocked ? t.dangerSoft : warning ? t.amberSoft : t.accentSoft;
 
+  // Правила смены: работа до 12 ч, после смены — отдых 6 ч.
+  // Конец отсчёта: у открытой смены — started_at + лимит, у отдыха — rest_until.
+  const endsAt = resting && work.rest_until
+    ? new Date(work.rest_until).getTime()
+    : !resting && work.started_at
+      ? new Date(work.started_at).getTime() + limit * 60000
+      : null;
+  const leftMinutes = endsAt ? Math.max(0, (endsAt - tick) / 60000) : 0;
+  const leftLabel = formatMinutes(leftMinutes);
+  const endsLabel = endsAt
+    ? new Date(endsAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+    : null;
+
   let title = "Рабочее время";
   let note = `До ограничения доступа к заказам осталось ${formatMinutes(remaining)}`;
 
   if (blocked) {
     title = "Доступ к заказам ограничен";
-    note = "Лимит рабочего времени (12 часов) исчерпан. Новые заказы не поступают.";
+    note = `Лимит рабочего времени (12 часов) исчерпан${endsLabel ? ` — до ${endsLabel}` : ""}. Новые заказы не поступают, нужен отдых 6 часов.`;
   } else if (warning) {
     title = "Скоро доступ к заказам ограничат";
-    note = `Осталось ${formatMinutes(remaining)} — после этого новые заказы не поступят.`;
+    note = `Осталось ${leftLabel}${endsLabel ? ` (до ${endsLabel})` : ""} — после этого новые заказы не поступят.`;
   } else if (resting) {
     title = "Отдых";
     note = work.rest_until
-      ? `После смены нужен отдых 6 часов. Вернёмся к заказам в ${new Date(work.rest_until).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}.`
+      ? `После смены нужен отдых 6 часов. Вернёмся к заказам в ${new Date(work.rest_until).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })} — через ${leftLabel}.`
       : "После смены нужен отдых 6 часов.";
   } else if (worked > 0) {
-    note = `Отработано ${formatMinutes(worked)} из 12 ч. До ограничения — ${formatMinutes(remaining)}.`;
+    note = `Отработано ${formatMinutes(worked)} из 12 ч. До ограничения — ${leftLabel}${endsLabel ? ` (до ${endsLabel})` : ""}.`;
   } else {
     note = "Отсчёт начнётся с первого принятого заказа. Лимит — 12 часов.";
   }
@@ -1238,11 +1258,16 @@ function WorkTimeCard({ work, t }) {
           <Icon name="trend" size={15} style={{ color: accent }} />
           {title}
         </span>
-        {worked > 0 && (
+        {endsAt ? (
+          /* Обратный отсчёт: до конца смены / до конца отдыха */
+          <span style={{ fontSize: 12.5, fontWeight: 800, color: accent }}>
+            {resting ? `через ${leftLabel}` : endsLabel}
+          </span>
+        ) : worked > 0 ? (
           <span style={{ fontSize: 12.5, fontWeight: 800, color: accent }}>
             {formatMinutes(worked)} / 12 ч
           </span>
-        )}
+        ) : null}
       </div>
 
       {worked > 0 && !resting && (
@@ -1446,7 +1471,9 @@ function ExecutorSupportPage({ me, t, m, onBack }) {
   async function load() {
     try {
       const res = await api("/messages");
-      setItems(Array.isArray(res?.messages) ? res.messages : []);
+      // Служебные сообщения (author_role=system) живут на вкладке Дашборд
+      const list = Array.isArray(res?.messages) ? res.messages : [];
+      setItems(list.filter(msg => msg.author_role !== "system"));
     } catch (e) {
       setError(e.message || "Не удалось загрузить переписку");
       setItems([]);
@@ -1483,7 +1510,7 @@ function ExecutorSupportPage({ me, t, m, onBack }) {
       <SubPageHeader m={m} title="Поддержка" onBack={onBack} />
 
       <p style={{ margin: "0 0 12px", fontSize: 13, color: m.sub, lineHeight: 1.5 }}>
-        Напишите оператору — ответ придёт сюда и в MAX. Сюда же приходят служебные сообщения.
+        Напишите оператору — ответ придёт сюда и в MAX. Служебные сообщения — на вкладке Профиль → Дашборд.
       </p>
 
       <div
@@ -1504,7 +1531,6 @@ function ExecutorSupportPage({ me, t, m, onBack }) {
         )}
         {items && items.map(msg => {
           const mine = msg.author_role === "executor";
-          const isSystem = msg.author_role === "system";
           return (
             <div
               key={msg.id}
@@ -1512,18 +1538,11 @@ function ExecutorSupportPage({ me, t, m, onBack }) {
                 alignSelf: mine ? "flex-end" : "flex-start",
                 maxWidth: "84%",
                 padding: "9px 12px", borderRadius: 14,
-                background: mine ? m.accent : isSystem ? m.cardAlt : m.inputBg,
+                background: mine ? m.accent : m.inputBg,
                 color: mine ? m.onAccent : m.text,
                 fontSize: 13, lineHeight: 1.4, wordBreak: "break-word",
               }}
             >
-              {isSystem && (
-                <span style={{
-                  display: "block", fontSize: 10.5, fontWeight: 800,
-                  textTransform: "uppercase", letterSpacing: 0.3,
-                  color: m.sub, marginBottom: 4,
-                }}>Служебное</span>
-              )}
               {msg.text}
             </div>
           );
@@ -1560,8 +1579,9 @@ function ExecutorSupportPage({ me, t, m, onBack }) {
   );
 }
 
-function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread, vehicleDue, onStats, onNotifications, onPhotoChecks, onVehicle, onInfo, onChangeRole, onSupport }) {
+function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread, vehicleDue, work, onStats, onNotifications, onPhotoChecks, onVehicle, onInfo, onSupport }) {
   const m = maxPalette(t.mode);
+  const [tab, setTab] = useState("profile");
   const maxUser = readMaxUser();
   const name = maxUser?.first_name || maxUser?.username || me.name || me.max_id || "Исполнитель";
   const initials = (name || "И")
@@ -1622,6 +1642,25 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
         }}>{name}</strong>
       </div>
 
+      {/* Вкладки: Профиль и Дашборд (смена, статистика, служебные сообщения) */}
+      <div style={{
+        display: "flex", gap: 4, padding: 4, borderRadius: 14,
+        background: m.cardAlt, marginBottom: 12,
+      }}>
+        {[["profile", "Профиль"], ["dashboard", "Дашборд"]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            style={{
+              flex: 1, padding: "9px 0", borderRadius: 11, border: 0, cursor: "pointer",
+              background: tab === id ? m.card : "transparent",
+              color: tab === id ? m.text : m.sub,
+              fontSize: 13, fontWeight: 800, fontFamily: "inherit",
+            }}
+          >{label}</button>
+        ))}
+      </div>
+
       {/* Отстранение от заказов: низкий рейтинг или решение администратора */}
       {me.suspension && (
         <div style={{
@@ -1635,6 +1674,8 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
         </div>
       )}
 
+      {tab === "profile" && (
+        <>
       <MaxGroup m={m}>
         <MaxRow m={m} icon={<Icon name="id" size={20} />} label="ID" value={maxId ?? "—"} />
         <MaxRow m={m} icon={<Icon name="star" size={20} />} label="Рейтинг"
@@ -1646,11 +1687,10 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
           value={STATUS_RU2[me.status] || "На проверке"} />
       </MaxGroup>
 
-      {/* Роли — вторым блоком: текущая роль и смена */}
+      {/* Текущая роль — только информация, смена роли убрана */}
       <MaxGroup m={m}>
         <MaxRow m={m} icon={<Icon name="truck" size={20} />} label="Текущая роль"
           value={ROLE_NAMES[activeRole] || "Не выбрана"} />
-        <MaxRow m={m} icon={<Icon name="check" size={20} />} label="Сменить роль" onClick={onChangeRole} />
       </MaxGroup>
 
       {/* Сиреневая строка-приглашение — аналогично «Пригласить друзей» в MAX */}
@@ -1705,7 +1745,113 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
           onClick={themeCycle}
         />
       </MaxGroup>
+        </>
+      )}
+
+      {tab === "dashboard" && (
+        <ExecutorDashboard me={me} t={t} work={work} earnings={earnings} activeRole={activeRole} />
+      )}
     </div>
+  );
+}
+
+// ---------- Дашборд: смена с обратным отсчётом, статистика, служебное ----------
+function ExecutorDashboard({ me, t, work, earnings, activeRole }) {
+  const s = makeStyles(t);
+  const [sys, setSys] = useState(null);
+
+  // Служебные сообщения (раньше висели в чате поддержки) — живём своим списком
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const res = await api("/messages");
+        const list = Array.isArray(res?.messages) ? res.messages : [];
+        if (alive) setSys(list.filter(msg => msg.author_role === "system"));
+      } catch (e) {
+        if (alive) setSys([]);
+      }
+    }
+    load();
+    const it = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(it); };
+  }, [me.id]);
+
+  return (
+    <>
+      {/* Смена: лимит 12 ч, предупреждение за 2 ч, отдых 6 ч — с обратным отсчётом */}
+      <WorkTimeCard work={work} t={t} />
+
+      {/* Сетка статов 2×2 — с главной страницы */}
+      <div style={s.statsGrid}>
+        <div style={s.statBig}>
+          <span style={s.statLabel}>Баланс</span>
+          <strong style={s.statMoney}>{Number(me.balance || 0).toLocaleString("ru-RU")} ₽</strong>
+          <span style={s.statNote}>наличные через оператора</span>
+        </div>
+        <div style={s.statSmall}>
+          <span style={s.statLabel}>
+            <Icon name="trend" size={12} style={{ display: "inline" }} /> Заработок 7 дней
+          </span>
+          <strong style={s.statValue(earnings && earnings.total > 0)}>
+            {earnings ? `${Number(earnings.total).toLocaleString("ru-RU")} ₽` : "—"}
+          </strong>
+          <span style={s.statNote}>{earnings ? `${earnings.orders_count} заказов` : "\u00A0"}</span>
+        </div>
+        <div style={s.statSmall}>
+          <span style={s.statLabel}>Верификация</span>
+          <strong style={s.statValue(me.status === "approved")}>
+            {me.status === "approved" ? "Пройдена" : me.status === "rejected" ? "Отклонён" : "На проверке"}
+          </strong>
+          <span style={s.statNote}>роль: {ROLE_NAMES[activeRole] || "—"}</span>
+        </div>
+        <div style={s.statSmall}>
+          <span style={s.statLabel}>
+            <Icon name="star" size={12} style={{ display: "inline" }} /> Рейтинг
+          </span>
+          <strong style={s.statValue((me.rating_percent ?? 100) >= 60)}>
+            <RatingBattery value={me.rating_percent ?? 100} w={44} />
+          </strong>
+          <span style={s.statNote}>по оценкам за 100 заказов</span>
+        </div>
+      </div>
+
+      {/* Служебное — системные сообщения, перенесённые из поддержки */}
+      <div style={{
+        marginTop: 16, padding: 16, borderRadius: 18,
+        background: t.card, border: `1px solid ${t.border}`,
+        display: "flex", flexDirection: "column", gap: 8,
+      }}>
+        <span style={{
+          display: "flex", alignItems: "center", gap: 8,
+          fontSize: 12.5, fontWeight: 800, color: t.sub,
+        }}>
+          <Icon name="doc" size={15} /> Служебное
+        </span>
+        {sys === null && (
+          <p style={{ margin: 0, fontSize: 12.5, color: t.sub }}>Загружаем…</p>
+        )}
+        {sys !== null && sys.length === 0 && (
+          <p style={{ margin: 0, fontSize: 12.5, color: t.sub }}>Пока нет служебных сообщений.</p>
+        )}
+        {sys !== null && sys.slice(-10).reverse().map((msg, i, arr) => (
+          <div
+            key={msg.id}
+            style={{
+              paddingTop: i < arr.length - 1 ? 8 : 0,
+              borderTop: i > 0 ? `1px solid ${t.border}` : "none",
+            }}
+          >
+            <span style={{ fontSize: 10.5, fontWeight: 750, color: t.sub }}>
+              {msg.created_at
+                ? new Date(msg.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+                : ""}
+            </span>
+            <p style={{ margin: "2px 0 0", fontSize: 13, lineHeight: 1.4, color: t.text }}>{msg.text}</p>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -2345,7 +2491,7 @@ export default function App() {
                 <span style={{ flex: 1, textAlign: "left" }}>
                   <strong style={{ display: "block", fontSize: 13.5, color: t.text }}>{currentRole.title}</strong>
                   <span style={{ fontSize: 11, color: t.sub }}>
-                    Сменить роль или добавить новую
+                    Ваша роль в сервисе
                   </span>
                 </span>
                 <Icon name="arrowRight" size={15} style={{ color: t.sub }} />
@@ -2589,12 +2735,12 @@ export default function App() {
               earnings={earnings}
               unread={unread}
               vehicleDue={vehicleDue}
+              work={work}
               onStats={() => goPage("stats")}
               onNotifications={() => goPage("notifications")}
               onPhotoChecks={() => goPage("photo")}
               onVehicle={() => goPage("vehicle")}
               onInfo={() => goPage("info")}
-              onChangeRole={() => goPage("roles")}
               onSupport={() => goPage("support")}
             />
           )}
