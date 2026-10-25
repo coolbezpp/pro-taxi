@@ -767,12 +767,6 @@ export default function App() {
 
       {page === "home" && (
         <div style={{ padding: "14px 16px 24px" }}>
-          {/* Строка поиска — ведёт в заказ такси */}
-          <button style={s.searchPill} onClick={() => goPage("taxi")}>
-            <Icon name="search" size={18} style={{ color: t.sub }} />
-            <span style={s.searchText}>Куда поедем?</span>
-          </button>
-
           {/* Активный заказ / оценка — появляется только когда есть заказ */}
           <div style={{ marginTop: 14 }}>
             <ActiveOrderCard />
@@ -804,6 +798,12 @@ export default function App() {
               ))}
             </div>
           )}
+
+          {/* Строка поиска — под плитками услуг, сразу перед Афишей */}
+          <button style={{ ...s.searchPill, marginTop: 16 }} onClick={() => goPage("taxi")}>
+            <Icon name="search" size={18} style={{ color: t.sub }} />
+            <span style={s.searchText}>Куда поедем?</span>
+          </button>
 
           {/* Афиша города — тёмные медиа-карточки */}
           {events.length > 0 && (
