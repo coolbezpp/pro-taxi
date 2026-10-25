@@ -632,10 +632,8 @@ def _completed_at(db, order):
     return event.created_at if event else None
 
 
-@app.get("/api/orders/{order_id}")
-def get_order(order_id:int, db: Session=Depends(get_db)):
-    o=db.query(models.Order).get(order_id)
-    if not o: raise HTTPException(404)
+def _order_payload(db, o):
+    """Полный словарь заказа — общий для выдачи и идемпотентной отмены."""
     payload = {c.name: getattr(o, c.name) for c in o.__table__.columns}
     done = _completed_at(db, o)
     payload["completed_at"] = done.isoformat() if done else None
@@ -644,6 +642,35 @@ def get_order(order_id:int, db: Session=Depends(get_db)):
         models.OrderEvent.event == "lost_item",
     ).first() is not None
     return payload
+
+
+def _require_order_participant(db: Session, order, user: dict) -> None:
+    """Выдача заказа — только его участникам (клиент или исполнитель)."""
+    if user.get("role") in ("admin", "operator"):
+        return
+    if user.get("role") == "executor":
+        try:
+            executor_id = int(user.get("id"))
+        except (TypeError, ValueError):
+            raise HTTPException(401, "Некорректный токен")
+        if order.executor_id and int(order.executor_id) == executor_id:
+            return
+        raise HTTPException(403, "Это не ваш заказ")
+
+    client = db.query(models.Client).filter(
+        models.Client.max_id == _token_max_id(db, user)
+    ).first()
+    if client and order.client_id == client.id:
+        return
+    raise HTTPException(403, "Это не ваш заказ")
+
+
+@app.get("/api/orders/{order_id}")
+def get_order(order_id:int, user=Depends(get_current_user), db: Session=Depends(get_db)):
+    o=db.query(models.Order).get(order_id)
+    if not o: raise HTTPException(404)
+    _require_order_participant(db, o, user)
+    return _order_payload(db, o)
 
 
 @app.get("/api/orders/{order_id}/share/{share_code}")
@@ -1535,7 +1562,11 @@ def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = De
     if not client or order.client_id != client.id:
         raise HTTPException(403, "Можно отменять только свои заказы")
 
-    if order.status not in ["created", "accepted"]:
+    if order.status == "cancelled":
+        # Повторный клик по уже отменённому заказу — не ошибка, возвращаем как есть
+        return _order_payload(db, order)
+
+    if order.status not in ["created", "assigned", "accepted"]:
         raise HTTPException(400, "Этот заказ уже нельзя отменить")
 
     order.status = "cancelled"
