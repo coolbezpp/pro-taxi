@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api, setExecutorToken } from "./api.js";
 import { useTheme, maxPalette } from "./theme.js";
+import TrackMap from "./TrackMap.jsx";
 
 // Штриховые SVG-иконки в едином стиле — как в клиентском приложении.
 const ICON_PATHS = {
@@ -1461,6 +1462,118 @@ function ExecutorNotificationsPage({ me, t, m, onBack }) {
 }
 
 // ---------- Переписка с оператором ----------
+// ---------- Подробности заказа по клику: инфо + трекинг на карте ----------
+// Карта ограничена Краснодарским краем — масштабируется только вниз.
+function ExecutorOrderDetail({ t, orderId, onClose }) {
+  const [order, setOrder] = useState(null);
+  const [track, setTrack] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      const [oRes, tRes] = await Promise.allSettled([
+        api(`/orders/${orderId}`),
+        api(`/orders/${orderId}/track`),
+      ]);
+      if (!alive) return;
+      if (oRes.status === "fulfilled") setOrder(oRes.value);
+      if (tRes.status === "fulfilled") setTrack(tRes.value);
+    }
+    load();
+    // Активный заказ трекаем живьём, завершённый/отменённый — один раз
+    const active = ["created", "assigned", "accepted", "in_progress"].includes(order?.status);
+    const it = active ? setInterval(load, 5000) : null;
+    return () => { alive = false; if (it) clearInterval(it); };
+  }, [orderId, order?.status]);
+
+  const status = order?.status || "created";
+  const executor = track?.executor;
+  const from = track && track.from_lat != null ? { lat: track.from_lat, lon: track.from_lon } : null;
+  const to = track && track.to_lat != null ? { lat: track.to_lat, lon: track.to_lon } : null;
+  const statusColor = status === "cancelled" ? t.danger : status === "completed" ? t.success : t.accent;
+
+  const rowStyle = {
+    display: "flex", justifyContent: "space-between", gap: 10,
+    padding: "9px 0", borderTop: `1px solid ${t.border}`, fontSize: 13,
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.45)",
+        display: "flex", alignItems: "flex-end", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: "100%", maxWidth: 480, maxHeight: "90dvh", overflowY: "auto",
+          background: t.bg, borderRadius: "20px 20px 0 0",
+          padding: "10px 16px 26px", boxSizing: "border-box",
+        }}
+      >
+        <div style={{ width: 42, height: 4, borderRadius: 999, background: t.border, margin: "2px auto 10px" }} />
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <strong style={{ fontSize: 17, color: t.text }}>Заказ №{orderId}</strong>
+          <button
+            onClick={onClose}
+            aria-label="Закрыть"
+            style={{
+              width: 32, height: 32, borderRadius: 10, border: 0, cursor: "pointer",
+              background: t.card, color: t.sub, fontSize: 17, fontWeight: 800,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >×</button>
+        </div>
+
+        {/* Крупный статус и основная информация */}
+        <div style={{ padding: 16, borderRadius: 18, background: t.card, border: `1px solid ${t.border}` }}>
+          <div style={{ fontSize: 20, fontWeight: 900, color: statusColor, letterSpacing: -0.3 }}>
+            {STATUS_RU[status] || status}
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 900, color: t.text, marginTop: 6 }}>
+            {order?.total_price != null ? `${order.total_price} ₽` : "—"}
+          </div>
+          <p style={{ margin: "10px 0 0", fontSize: 14, color: t.text, lineHeight: 1.4 }}>
+            {track?.from_address || order?.from_address} → {track?.to_address || order?.to_address}
+          </p>
+          {track?.comment && (
+            <p style={{ margin: "8px 0 0", fontSize: 12.5, color: t.sub, lineHeight: 1.4 }}>
+              Комментарий: {track.comment}
+            </p>
+          )}
+
+          {order?.created_at && (
+            <div style={{ ...rowStyle, borderTop: "none", marginTop: 8 }}>
+              <span style={{ color: t.sub }}>Создан</span>
+              <span style={{ color: t.text }}>
+                {new Date(order.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            </div>
+          )}
+          {order?.completed_at && (
+            <div style={rowStyle}>
+              <span style={{ color: t.sub }}>Завершён</span>
+              <span style={{ color: t.text }}>
+                {new Date(order.completed_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Трекинг: карта Краснодарского края — только уменьшение масштаба */}
+        {(from || to || executor) && (
+          <div style={{ marginTop: 12 }}>
+            <TrackMap from={from} to={to} executor={executor} t={t} height={240} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ExecutorSupportPage({ me, t, m, onBack }) {
   const [items, setItems] = useState(null);
   const [text, setText] = useState("");
@@ -1931,6 +2044,8 @@ export default function App() {
   // Навигация со стеком: кнопка «назад» телефона возвращает предыдущую страницу,
   // а не закрывает миниапп (см. эффект с WebApp.BackButton ниже)
   const [nav, setNav] = React.useState({ page: role ? "home" : "role", stack: [] });
+  // Подробная карточка заказа (клик из «Мои») с трекингом на карте
+  const [detailOrderId, setDetailOrderId] = React.useState(null);
   const page = nav.page;
   const goPage = (next) => setNav(n => ({ page: next, stack: [...n.stack, n.page] }));
   const backPage = () => setNav(n => (
@@ -2628,19 +2743,25 @@ export default function App() {
 
               {myOrders.map(o => (
                 <div key={o.id} style={s.card}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <strong style={{ color: t.text }}>Заказ №{o.id}</strong>
-                    <strong style={{ color: t.text }}>{o.total_price} ₽</strong>
-                  </div>
-                  <p style={{ margin: "0 0 6px", color: t.text }}>{o.from_address} → {o.to_address}</p>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                    <span style={{ color: t.sub, fontSize: 12 }}>{STATUS_RU[o.status] || o.status}</span>
-                    {o.client_rating != null && (
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                        <RatingBattery value={o.client_rating} w={34} />
-                        <span style={{ fontSize: 11, color: t.sub }}>клиент</span>
-                      </span>
-                    )}
+                  {/* Клик по информации заказа — подробная карточка с трекингом */}
+                  <div
+                    onClick={() => setDetailOrderId(o.id)}
+                    style={{ cursor: "pointer", marginBottom: 10 }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                      <strong style={{ color: t.text }}>Заказ №{o.id}</strong>
+                      <strong style={{ color: t.text }}>{o.total_price} ₽</strong>
+                    </div>
+                    <p style={{ margin: "4px 0 6px", color: t.text }}>{o.from_address} → {o.to_address}</p>
+                    {/* Крупный статус заказа (батарея оценки клиента убрана) */}
+                    <span style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      fontSize: 14.5, fontWeight: 850,
+                      color: o.status === "cancelled" ? t.danger : o.status === "completed" ? t.success : t.accent,
+                    }}>
+                      {STATUS_RU[o.status] || o.status}
+                      <Icon name="chevronRight" size={14} />
+                    </span>
                   </div>
 
                   {o.status === "assigned" && (
@@ -2805,6 +2926,14 @@ export default function App() {
               </button>
             ))}
           </nav>
+
+          {detailOrderId != null && (
+            <ExecutorOrderDetail
+              t={t}
+              orderId={detailOrderId}
+              onClose={() => setDetailOrderId(null)}
+            />
+          )}
         </>
       )}
     </div>

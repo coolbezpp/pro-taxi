@@ -12,6 +12,10 @@ import {
 setWorkerUrl(workerUrl);
 installPmtilesProtocol();
 
+// Границы Краснодарского края: трекинг живёт только в крае —
+// карта «не в масштабе планеты», масштабируется только вниз
+const KKR_BOUNDS = [[36.6, 43.3], [41.7, 47.1]];
+
 // Карта слежения: точки А/Б и движение исполнителя (только просмотр).
 export default function TrackMap({ from, to, executor, t, height = 240 }) {
   const container = useRef(null);
@@ -44,7 +48,22 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
         }
       });
       mapRef.current = map;
-      map.on("load", () => setReady(true));
+      map.on("load", () => {
+        // Подгоняем карту под Краснодарский край и запрещаем зум-in:
+        // максимум — масштаб подгонки края, дальше только уменьшение
+        try {
+          const kkr = LngLatBounds.convert(KKR_BOUNDS);
+          const cam = map.cameraForBounds(kkr, {
+            padding: { top: 36, bottom: 36, left: 24, right: 24 },
+          });
+          if (cam && Number.isFinite(cam.zoom)) {
+            map.setMaxZoom(cam.zoom);
+            map.setMinZoom(Math.max(3, cam.zoom - 5));
+          }
+          map.setMaxBounds(kkr);
+        } catch (e) {}
+        setReady(true);
+      });
       observer = new ResizeObserver(() => map.resize());
       observer.observe(container.current);
     } catch (e) {

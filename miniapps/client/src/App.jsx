@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import OrderForm from "./OrderForm.jsx";
 import OrderSearch from "./OrderSearch.jsx";
+import OrderDetailSheet from "./OrderDetail.jsx";
 import { api } from "./api.js";
 import { ActiveOrderCard, useSummary } from "./Summary.jsx";
 import { useTheme, formatEventDate, maxPalette } from "./theme.js";
@@ -372,6 +373,8 @@ export default function App() {
   const [popular, setPopular] = useState(null);
   const [ads, setAds] = useState([]);
   const [events, setEvents] = useState([]);
+  // Подробная карточка заказа (клик из истории) с трекингом на карте
+  const [detailOrderId, setDetailOrderId] = useState(null);
 
   const servicesGrid = React.useMemo(() => {
     const list = [...SERVICES];
@@ -919,7 +922,12 @@ export default function App() {
           orders={orders} order={order} extras={extras}
           onIncrease={increase} onDecide={decideExtra}
           onToggleFavorite={toggleFavorite} onContinue={continueOrder}
+          onOpen={o => setDetailOrderId(o.id)}
         />
+      )}
+
+      {detailOrderId != null && (
+        <OrderDetailSheet t={t} orderId={detailOrderId} onClose={() => setDetailOrderId(null)} />
       )}
 
       {page === "favorites" && (
@@ -1213,7 +1221,7 @@ function CityPage({ s, t, city, setCity }) {
   );
 }
 
-function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggleFavorite, onContinue }) {
+function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggleFavorite, onContinue, onOpen }) {
   return (
     <div style={{ padding: "18px 16px 24px" }}>
       <h1 style={s.pageTitle}>Мои заказы</h1>
@@ -1231,11 +1239,15 @@ function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggl
         const isDone = o.status === "completed";
         const isActive = ["created", "assigned", "accepted", "in_progress"].includes(o.status);
         return (
-          <div key={o.id} style={{ ...s.listGroup, marginBottom: 10 }}>
+          <div
+            key={o.id}
+            onClick={() => onOpen(o)}
+            style={{ ...s.listGroup, marginBottom: 10, cursor: "pointer" }}
+          >
             <div style={{ padding: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                 <span style={{
-                  padding: "5px 10px", borderRadius: 999, fontSize: 11, fontWeight: 800,
+                  padding: "7px 13px", borderRadius: 999, fontSize: 13.5, fontWeight: 850,
                   background: isCancel ? t.dangerSoft : isDone ? t.successSoft : t.accent,
                   color: isCancel ? t.danger : isDone ? t.success : t.onAccent,
                 }}>
@@ -1244,7 +1256,7 @@ function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggl
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <strong style={{ color: t.text, fontSize: 15 }}>{o.total_price} ₽</strong>
                   <button
-                    onClick={() => onToggleFavorite(o)}
+                    onClick={e => { e.stopPropagation(); onToggleFavorite(o); }}
                     aria-label={o.favorite ? "Убрать из избранного" : "В избранное"}
                     style={{
                       background: "transparent", border: 0, cursor: "pointer", padding: 0,
@@ -1275,13 +1287,13 @@ function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggl
               </p>
 
               {isActive && (
-                <button onClick={() => onContinue(o)} style={{ ...s.btnBlue, marginTop: 12 }}>
+                <button onClick={e => { e.stopPropagation(); onContinue(o); }} style={{ ...s.btnBlue, marginTop: 12 }}>
                   Продолжить — следить за заказом
                 </button>
               )}
 
               {order && order.id === o.id && (
-                <>
+                <div onClick={e => e.stopPropagation()}>
                   <button onClick={onIncrease} style={{ ...s.btnYellow, marginTop: 12 }}>Повысить цену +50 ₽</button>
 
                   {extras.filter(x => x.status === "pending").map(x => (
@@ -1304,7 +1316,7 @@ function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggl
                       ))}
                     </div>
                   )}
-                </>
+                </div>
               )}
             </div>
           </div>
