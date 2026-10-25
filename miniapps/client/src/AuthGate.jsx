@@ -1,22 +1,50 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTheme } from "./theme.js";
 
 const API = import.meta.env.VITE_API_URL || "/api";
+
+// В реальном MAX объект миниаппа подставляется в window.Max / window.Max.WebApp,
+// а не в window.WebApp (это Telegram-совместимость). Раньше AuthGate искал только
+// window.WebApp и в реальном MAX молча показывал «Откройте через кнопку» —
+// верификация не спрашивалась. Ищем объект во всех местах, как это делает
+// ContactGate исполнителя (там верификация в проде работает).
+function getWebApp() {
+  return (
+    window.Max?.WebApp ||
+    window.Max ||
+    window.WebApp ||
+    window.Telegram?.WebApp ||
+    null
+  );
+}
+
+function getInitData() {
+  return (
+    window.Max?.initData ||
+    window.Max?.WebApp?.initData ||
+    window.WebApp?.initData ||
+    window.Telegram?.WebApp?.initData ||
+    new URLSearchParams(window.location.search).get("initData") ||
+    ""
+  );
+}
 
 export default function AuthGate({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem("token"));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const autoAsked = useRef(false);
   const { t } = useTheme();
 
   async function login() {
-    const webApp = window.WebApp;
+    const webApp = getWebApp();
+    const initData = webApp?.initData || getInitData();
 
-    if (!webApp?.initData) {
+    if (!initData) {
       setError("Откройте приложение через кнопку в MAX.");
       return;
     }
-    if (typeof webApp.requestContact !== "function") {
+    if (!webApp || typeof webApp.requestContact !== "function") {
       setError("Ваш клиент MAX не поддерживает запрос номера телефона.");
       return;
     }
@@ -41,7 +69,7 @@ export default function AuthGate({ children }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          init_data: webApp.initData,
+          init_data: initData,
           contact
         })
       });
@@ -75,6 +103,18 @@ export default function AuthGate({ children }) {
       setBusy(false);
     }
   }
+
+  // Как у исполнителя: в MAX номер спрашиваем сразу при открытии,
+  // кнопка остаётся для повторной попытки и для открытия вне MAX.
+  useEffect(() => {
+    if (token || autoAsked.current) return;
+    const webApp = getWebApp();
+    if (webApp && typeof webApp.requestContact === "function") {
+      autoAsked.current = true;
+      login();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (token) return children;
 

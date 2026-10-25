@@ -702,7 +702,10 @@ export default function App() {
   const contactAsked = React.useRef(false);
   async function syncContact() {
     if (contactAsked.current) return;
-    const webApp = window.WebApp || window.Max?.WebApp || window.Max;
+    // Объект миниаппа в реальном MAX живёт в window.Max / window.Max.WebApp,
+    // а не в window.WebApp — ищем во всех местах, как AuthGate и ContactGate.
+    const webApp =
+      window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;
     if (!webApp || typeof webApp.requestContact !== "function") return;
     contactAsked.current = true;
     try {
@@ -717,7 +720,13 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          init_data: webApp.initData || window.Max?.initData || "",
+          init_data:
+            webApp.initData ||
+            window.Max?.initData ||
+            window.Max?.WebApp?.initData ||
+            window.WebApp?.initData ||
+            window.Telegram?.WebApp?.initData ||
+            "",
           contact
         })
       });
