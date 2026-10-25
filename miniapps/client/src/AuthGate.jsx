@@ -3,11 +3,10 @@ import { useTheme } from "./theme.js";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 
-// В реальном MAX объект миниаппа подставляется в window.Max / window.Max.WebApp,
-// а не в window.WebApp (это Telegram-совместимость). Раньше AuthGate искал только
-// window.WebApp и в реальном MAX молча показывал «Откройте через кнопку» —
-// верификация не спрашивалась. Ищем объект во всех местах, как это делает
-// ContactGate исполнителя (там верификация в проде работает).
+// Объект миниаппа может жить в разных местах: официальный SDK MAX задаёт
+// window.WebApp, часть клиентов инжектит window.Max / window.Max.WebApp,
+// Telegram-совместимость — window.Telegram.WebApp. Ищем во всех местах,
+// как это делает ContactGate исполнителя (там верификация в проде работает).
 function getWebApp() {
   return (
     window.Max?.WebApp ||
@@ -29,8 +28,26 @@ function getInitData() {
   );
 }
 
+// Запрос номера реально работает только внутри оболочки MAX
+// (native webview-мост или iframe-режим). В обычном браузере автозапрос
+// завис бы на 60 секунд до таймаута SDK — там сразу показываем кнопку.
+function inMaxShell() {
+  try {
+    return Boolean(window.WebViewHandler) || window.self !== window.top;
+  } catch (_) {
+    return false;
+  }
+}
+
 export default function AuthGate({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem("token"));
+  const [token] = useState(() => localStorage.getItem("token"));
+  // Номер подтверждаем при каждом открытии миниаппа — так же, как у
+  // исполнителя (ContactGate): один раз подтвердил — сессия вошла.
+  const [confirmed] = useState(
+    () =>
+      sessionStorage.getItem("client_contact_ok") === "1" &&
+      Boolean(localStorage.getItem("token"))
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const autoAsked = useRef(false);
@@ -87,16 +104,22 @@ export default function AuthGate({ children }) {
       }
 
       localStorage.setItem("token", data.token);
-      setToken(data.token);
+      sessionStorage.setItem("client_contact_ok", "1");
+      window.location.reload();
     } catch (e) {
       // PRO_ERROR_DEBUG
       let message;
-      try {
-        message = typeof e === "object"
-          ? JSON.stringify(e)
-          : String(e);
-      } catch {
-        message = String(e);
+      if (e && typeof e === "object" && e.error?.code) {
+        message =
+          "MAX не ответил на запрос номера. Попробуйте ещё раз или откройте приложение через кнопку MAX.";
+      } else {
+        try {
+          message = typeof e === "object"
+            ? JSON.stringify(e)
+            : String(e);
+        } catch {
+          message = String(e);
+        }
       }
       setError(message || "Неизвестная ошибка входа");
     } finally {
@@ -104,19 +127,23 @@ export default function AuthGate({ children }) {
     }
   }
 
-  // Как у исполнителя: в MAX номер спрашиваем сразу при открытии,
-  // кнопка остаётся для повторной попытки и для открытия вне MAX.
+  // В MAX номер спрашиваем сразу при открытии; кнопка остаётся для
+  // повторной попытки и для открытия вне оболочки MAX.
   useEffect(() => {
-    if (token || autoAsked.current) return;
+    if (confirmed || autoAsked.current) return;
     const webApp = getWebApp();
-    if (webApp && typeof webApp.requestContact === "function") {
+    if (
+      inMaxShell() &&
+      webApp &&
+      typeof webApp.requestContact === "function"
+    ) {
       autoAsked.current = true;
       login();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (token) return children;
+  if (confirmed && token) return children;
 
   return (
     <div style={{
@@ -147,7 +174,7 @@ export default function AuthGate({ children }) {
             opacity: busy ? 0.7 : 1
           }}
         >
-          {busy ? "Подтверждаем…" : "Войти через MAX"}
+          {busy ? "Подтверждаем…" : "Подтвердить номер"}
         </button>
 
         {error && (
