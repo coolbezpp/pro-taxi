@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api.js";
-import TrackMap from "./TrackMap.jsx";
+// maplibre (~600 КБ) грузим только когда открывают карточку заказа:
+// иначе весь бандл тянет его сразу и телефон вью за десятки секунд.
+const TrackMap = React.lazy(() => import("./TrackMap.jsx"));
 
 const STATUS_TEXT = {
   created: "Ищем исполнителя",
@@ -141,7 +143,11 @@ export default function OrderDetailSheet({ t, orderId, onClose }) {
         {/* Трекинг: карта Краснодарского края (масштаб — только вниз) */}
         {(from || to || executor) && (
           <div style={{ marginTop: 12 }}>
-            <TrackMap from={from} to={to} executor={executor} t={t} height={240} />
+            <React.Suspense fallback={
+              <div style={{ height: 240, borderRadius: 14, background: t.card, border: `1px solid ${t.border}` }} />
+            }>
+              <TrackMap from={from} to={to} executor={executor} t={t} height={240} />
+            </React.Suspense>
           </div>
         )}
       </div>

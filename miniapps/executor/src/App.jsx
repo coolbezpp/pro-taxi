@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api, setExecutorToken } from "./api.js";
 import { useTheme, maxPalette } from "./theme.js";
-import TrackMap from "./TrackMap.jsx";
+// maplibre (~600 КБ) — отдельный чанк, грузится только при открытии
+// карточки заказа с трекингом; стартовый экран стартует мгновенно.
+const TrackMap = React.lazy(() => import("./TrackMap.jsx"));
 
 // Штриховые SVG-иконки в едином стиле — как в клиентском приложении.
 const ICON_PATHS = {
@@ -1566,7 +1568,11 @@ function ExecutorOrderDetail({ t, orderId, onClose }) {
         {/* Трекинг: карта Краснодарского края — только уменьшение масштаба */}
         {(from || to || executor) && (
           <div style={{ marginTop: 12 }}>
-            <TrackMap from={from} to={to} executor={executor} t={t} height={240} />
+            <React.Suspense fallback={
+              <div style={{ height: 240, borderRadius: 14, background: t.card, border: `1px solid ${t.border}` }} />
+            }>
+              <TrackMap from={from} to={to} executor={executor} t={t} height={240} />
+            </React.Suspense>
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import TrackMap from "./TrackMap.jsx";
+// maplibre вынесен в отдельный чанк — тянем его только при открытии карты.
+const TrackMap = React.lazy(() => import("./TrackMap.jsx"));
 
 const STATUS_TEXT = {
   created: "Ищем исполнителя",
@@ -228,7 +229,11 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
       {/* Слежение за исполнителем */}
       {executor && (
         <div style={{ marginTop: 12 }}>
-          <TrackMap from={from} to={to} executor={executor} t={t} height={230} />
+          <React.Suspense fallback={
+            <div style={{ height: 230, borderRadius: 14, background: t.card, border: `1px solid ${t.border}` }} />
+          }>
+            <TrackMap from={from} to={to} executor={executor} t={t} height={230} />
+          </React.Suspense>
         </div>
       )}
 
