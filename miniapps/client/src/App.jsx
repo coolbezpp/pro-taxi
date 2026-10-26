@@ -1112,10 +1112,18 @@ function ProfilePage({ s, t, summary, setting, choose, city, onCity, onSupport, 
   const THEME_RU = { light: "Светлая", dark: "Тёмная", system: "Системная" };
 
   async function invite() {
-    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй!";
+    // Приглашение из профиля клиента ведёт в приложение исполнителя —
+    // так пользователи переходят в «Про» на стороне работы.
+    const url = "https://procityservice.ru/executor";
+    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй! " + url;
     try {
+      const wb = window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;
+      if (wb?.share) {
+        await wb.share({ text, url });
+        return;
+      }
       if (navigator.share) {
-        await navigator.share({ title: "Про", text });
+        await navigator.share({ title: "Про", text, url });
         return;
       }
       await navigator.clipboard.writeText(text);

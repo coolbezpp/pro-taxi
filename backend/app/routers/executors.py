@@ -321,6 +321,9 @@ def executor_profile(db: Session, executor: Executor):
         # Действующее отстранение от заказов (низкий рейтинг / администратор)
         "suspension": rating.suspension_json(rating.active_suspension(db, executor.id)),
         "is_online": bool(executor.is_online),
+        # Своя последняя геопозиция — для карты на главной (как в Яндекс такси)
+        "last_lat": executor.last_lat,
+        "last_lon": executor.last_lon,
         "skip_streak": int(executor.skip_streak or 0),
     }
 

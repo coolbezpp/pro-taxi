@@ -4,6 +4,8 @@ import { useTheme, maxPalette } from "./theme.js";
 // maplibre (~600 КБ) — отдельный чанк, грузится только при открытии
 // карточки заказа с трекингом; стартовый экран стартует мгновенно.
 const TrackMap = React.lazy(() => import("./TrackMap.jsx"));
+// Карта на главной (стиль Яндекс такси) — тоже отдельный чанк
+const HomeMap = React.lazy(() => import("./HomeMap.jsx"));
 
 // Штриховые SVG-иконки в едином стиле — как в клиентском приложении.
 const ICON_PATHS = {
@@ -1717,10 +1719,17 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
   const THEME_RU = { light: "Светлая", dark: "Тёмная", system: "Системная" };
 
   async function invite() {
-    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй!";
+    // Ссылка на приложение исполнителя — чтобы приглашение вело сразу в «Про».
+    const url = "https://procityservice.ru/executor";
+    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй! " + url;
     try {
+      const wb = window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;
+      if (wb?.share) {
+        await wb.share({ text, url });
+        return;
+      }
       if (navigator.share) {
-        await navigator.share({ title: "Про", text });
+        await navigator.share({ title: "Про", text, url });
         return;
       }
       await navigator.clipboard.writeText(text);
@@ -2550,12 +2559,29 @@ export default function App() {
               style={{ ...s.onlineBtn(online), opacity: work && !work.can_accept_orders ? 0.55 : 1 }}
             >
               <span style={s.onlineDot(online)} />
-              {online ? "На линии" : "Отдыхаю"}
+              {online ? "Работаю" : "Отдыхаю"}
             </button>
           </header>
 
           {page === "home" && me && (
             <>
+              {/* Карта как в Яндекс такси: наши тайлы PMTiles Краснодарского
+                  края, синяя точка «я здесь» — своя позиция на линии */}
+              <React.Suspense fallback={
+                <div style={{
+                  height: 300, borderRadius: 18, marginBottom: 12,
+                  background: t.mapBg, border: `1px solid ${t.border}`,
+                }} />
+              }>
+                <HomeMap
+                  t={t}
+                  position={
+                    me.last_lat != null && me.last_lon != null
+                      ? { lat: me.last_lat, lon: me.last_lon }
+                      : null
+                  }
+                />
+              </React.Suspense>
               {/* Контроль рабочего времени: лимит 12 ч, предупреждение, отдых */}
               {/* Отстранение от заказов: низкий рейтинг или администратор */}
               {me.suspension && (
@@ -2628,7 +2654,7 @@ export default function App() {
               >
                 <span style={s.liveDot(online && (work?.can_accept_orders ?? true))} />
                 {!online
-                  ? "Включите «На линии»"
+                  ? "Включите «Работаю»"
                   : !(work?.can_accept_orders ?? true)
                     ? (work?.status === "resting" ? "Отдых 6 часов" : "Доступ к заказам ограничен")
                     : "Смотреть заказы"}
