@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from "react";
-import { Map, AttributionControl, Marker, setWorkerUrl } from "maplibre-gl";
+import React, { useEffect, useRef, useState } from "react";
+import { Map, Marker, setWorkerUrl } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
@@ -11,6 +11,31 @@ import {
 
 setWorkerUrl(workerUrl);
 installPmtilesProtocol();
+
+// Примерные координаты по IP провайдера доступа — запасной источник,
+// когда GPS молчит (нет разрешения, спутники не ловятся): город-уровень,
+// на карте показывается большим ореолом «где-то здесь».
+async function ipHint() {
+  for (const url of ["https://ipwho.is/", "https://ipapi.co/json/"]) {
+    try {
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const to = ctrl ? setTimeout(() => ctrl.abort(), 4500) : null;
+      const r = await fetch(url, ctrl ? { signal: ctrl.signal } : {});
+      if (to) clearTimeout(to);
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (!j || j.success === false) continue;
+      const lat = Number(j.latitude ?? j.lat);
+      const lon = Number(j.longitude ?? j.lon);
+      if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+        return { lat, lon };
+      }
+    } catch (e) {
+      // источник недоступен — пробуем следующий
+    }
+  }
+  return null;
+}
 
 // Краснодар — стартовый центр, пока позиция не известна
 const KKR_CENTER = [38.975, 45.035];
@@ -27,6 +52,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const accRef = useRef(40);   // точность последнего fix, метры
   const gpsRef = useRef(false); // был ли свежий GPS-fix
   const sentRef = useRef(0);   // когда последний раз шли позицию на сервер
+  const [geoBlocked, setGeoBlocked] = useState(false); // геолокация запрещена
 
   const height = full
     ? "calc(100dvh - 128px)"
@@ -72,6 +98,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     let map;
     let observer;
     let watchId;
+    let hintTimer;
     try {
       map = new Map({
         container: container.current,
@@ -81,10 +108,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         maxZoom: 14,
         attributionControl: false,
       });
-      map.addControl(
-        new AttributionControl({ customAttribution: OSM_ATTRIBUTION, compact: true }),
-        "bottom-left"
-      );
+      // Копирайт — свой статичный неинтерактивный ярлык в JSX (клик по
+      // «© OpenStreetMap» больше не открывает полное описание)
       // Свой тайловый сервер недоступен — переключаемся на публичный
       map.on("error", (e) => {
         if (e?.error?.message?.includes("pmtiles") && map.getStyle()?.sources?.osm) {
@@ -107,6 +132,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
             const lon = pos.coords.longitude;
             const lat = pos.coords.latitude;
             ensureMarker(lon, lat, pos.coords.accuracy);
+            setGeoBlocked(false);
             if (!gpsRef.current) {
               gpsRef.current = true;
               map.flyTo({ center: [lon, lat], zoom: 13.8, duration: 1000 });
@@ -121,10 +147,31 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
         );
       }
+
+      // Разрешение на геолокацию отозвано — предупредим прямо на карте
+      try {
+        if (navigator.permissions?.query) {
+          navigator.permissions.query({ name: "geolocation" }).then((st) => {
+            setGeoBlocked(st.state === "denied");
+            st.onchange = () => setGeoBlocked(st.state === "denied");
+          }).catch(() => {});
+        }
+      } catch (e) {}
+
+      // GPS молчит (нет разрешения / спутники не ловятся) — через 7 секунд
+      // берём примерные координаты по IP провайдера доступа
+      hintTimer = setTimeout(async () => {
+        if (gpsRef.current || markerRef.current) return;
+        const hint = await ipHint();
+        if (!hint || gpsRef.current || markerRef.current || !mapRef.current) return;
+        ensureMarker(hint.lon, hint.lat, 3500);
+        mapRef.current.flyTo({ center: [hint.lon, hint.lat], zoom: 10.8, duration: 900 });
+      }, 7000);
     } catch (e) {
       return undefined;
     }
     return () => {
+      clearTimeout(hintTimer);
       if (watchId != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchId);
       }
@@ -202,6 +249,26 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           <path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3" />
         </svg>
       </button>
+      {/* Статичный неинтерактивный копирайт (pointer-events: none —
+          клик не открывает описание OpenStreetMap) */}
+      <div aria-hidden="true" style={{
+        position: "absolute", left: 8, bottom: 8, zIndex: 2,
+        fontSize: 9.5, lineHeight: 1.3,
+        color: "rgba(60,60,67,.8)", background: "rgba(255,255,255,.75)",
+        borderRadius: 6, padding: "2px 6px",
+        pointerEvents: "none", userSelect: "none", WebkitUserSelect: "none",
+      }}>{OSM_ATTRIBUTION}</div>
+      {geoBlocked && (
+        <div style={{
+          position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
+          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "7px 13px",
+          borderRadius: 999, background: "rgba(255,214,102,.95)", color: "#5b4200",
+          fontSize: 11, fontWeight: 750, textAlign: "center", lineHeight: 1.35,
+          boxShadow: "0 6px 16px rgba(0,0,0,.22)",
+        }}>
+          Геопозиция запрещена — разрешите доступ в настройках телефона
+        </div>
+      )}
       <style>{`
         @keyframes proDotPulse {
           0% { box-shadow: 0 0 0 0 rgba(47,123,255,.35); }

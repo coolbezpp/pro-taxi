@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Map, Marker, LngLatBounds, AttributionControl, setWorkerUrl } from "maplibre-gl";
+import { Map, Marker, LngLatBounds, setWorkerUrl } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
@@ -34,13 +34,8 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
         zoom: 12,
         attributionControl: false,
       });
-      map.addControl(
-        new AttributionControl({
-          customAttribution: OSM_ATTRIBUTION,
-          compact: true,
-        }),
-        "bottom-left"
-      );
+      // Копирайт — статичный неинтерактивный ярлык в JSX (клик по нему
+      // не открывает описание OpenStreetMap)
       // Если свой тайловый сервер недоступен — переключаемся на публичный
       map.on("error", (e) => {
         if (e?.error?.message?.includes("pmtiles") && map.getStyle()?.sources?.osm) {
@@ -165,6 +160,13 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
       border: `1px solid ${t.border}`,
     }}>
       <div ref={container} style={{ position: "absolute", inset: 0 }} />
+      <div aria-hidden="true" style={{
+        position: "absolute", left: 8, bottom: 8, zIndex: 2,
+        fontSize: 9.5, lineHeight: 1.3,
+        color: "rgba(60,60,67,.8)", background: "rgba(255,255,255,.75)",
+        borderRadius: 6, padding: "2px 6px",
+        pointerEvents: "none", userSelect: "none", WebkitUserSelect: "none",
+      }}>{OSM_ATTRIBUTION}</div>
     </div>
   );
 }
