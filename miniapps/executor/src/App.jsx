@@ -2314,6 +2314,19 @@ export default function App() {
 
   useEffect(() => () => clearInterval(timerRef.current), []);
 
+  // Своя геопозиция с главной — держим профиль свежим, чтобы карта
+  // в следующий раз открывалась на реальной точке, а не на устаревшей
+  const sentPosAtRef = useRef(0);
+  const sendHomePos = (lat, lon) => {
+    const now = Date.now();
+    if (!me || now - sentPosAtRef.current < 120000) return;
+    sentPosAtRef.current = now;
+    api(`/executors/${me.id}/position`, {
+      method: "POST",
+      body: { lat, lon },
+    }).catch(() => {});
+  };
+
   // Геопозиция для слежения за исполнителем: пока есть активный заказ
   useEffect(() => {
     const active = myOrders.find(o => ["assigned", "accepted", "in_progress"].includes(o.status));
@@ -2563,102 +2576,27 @@ export default function App() {
             </button>
           </header>
 
-          {page === "home" && me && (
+          {page === "home" && (
             <>
-              {/* Карта как в Яндекс такси: наши тайлы PMTiles Краснодарского
-                  края, синяя точка «я здесь» — своя позиция на линии */}
+              {/* Главная исполнителя — только карта во весь доступный экран:
+                  наши тайлы PMTiles Краснодарского края + живая геопозиция */}
               <React.Suspense fallback={
                 <div style={{
-                  height: 300, borderRadius: 18, marginBottom: 12,
-                  background: t.mapBg, border: `1px solid ${t.border}`,
+                  height: "calc(100dvh - 128px)", margin: "0 -16px",
+                  background: t.mapBg,
                 }} />
               }>
                 <HomeMap
                   t={t}
+                  full
                   position={
-                    me.last_lat != null && me.last_lon != null
+                    me && me.last_lat != null && me.last_lon != null
                       ? { lat: me.last_lat, lon: me.last_lon }
                       : null
                   }
+                  onPosition={sendHomePos}
                 />
               </React.Suspense>
-              {/* Контроль рабочего времени: лимит 12 ч, предупреждение, отдых */}
-              {/* Отстранение от заказов: низкий рейтинг или администратор */}
-              {me.suspension && (
-                <div style={{
-                  marginBottom: 12, padding: 14, borderRadius: 16,
-                  background: t.dangerSoft, color: t.danger, fontSize: 13, lineHeight: 1.45,
-                }}>
-                  <strong style={{ display: "block", marginBottom: 2 }}>
-                    Отстранение от заказов до {new Date(me.suspension.ends_at).toLocaleString("ru-RU")}
-                  </strong>
-                  {me.suspension.reason}. Уже назначенные поездки можно завершить.
-                </div>
-              )}
-              <WorkTimeCard work={work} t={t} />
-              {/* Сетка статов 2×2 — баланс, доход, статус, рейтинг */}
-              <div style={s.statsGrid}>
-                <div style={s.statBig}>
-                  <span style={s.statLabel}>Баланс</span>
-                  <strong style={s.statMoney}>{Number(me.balance || 0).toLocaleString("ru-RU")} ₽</strong>
-                  <span style={s.statNote}>наличные через оператора</span>
-                </div>
-                <div style={s.statSmall}>
-                  <span style={s.statLabel}>
-                    <Icon name="trend" size={12} style={{ display: "inline" }} /> Заработок 7 дней
-                  </span>
-                  <strong style={s.statValue(earnings && earnings.total > 0)}>
-                    {earnings ? `${Number(earnings.total).toLocaleString("ru-RU")} ₽` : "—"}
-                  </strong>
-                  <span style={s.statNote}>{earnings ? `${earnings.orders_count} заказов` : "\u00A0"}</span>
-                </div>
-                <div style={s.statSmall}>
-                  <span style={s.statLabel}>Верификация</span>
-                  <strong style={s.statValue(me.status === "approved")}>
-                    {me.status === "approved" ? "Пройдена" : me.status === "rejected" ? "Отклонён" : "На проверке"}
-                  </strong>
-                  <span style={s.statNote}>роль: {ROLE_NAMES[activeRole] || "—"}</span>
-                </div>
-                <div style={s.statSmall}>
-                  <span style={s.statLabel}>
-                    <Icon name="star" size={12} style={{ display: "inline" }} /> Рейтинг
-                  </span>
-                  <strong style={s.statValue((me.rating_percent ?? 100) >= 60)}>
-                    <RatingBattery value={me.rating_percent ?? 100} w={44} />
-                  </strong>
-                  <span style={s.statNote}>по оценкам за 100 заказов</span>
-                </div>
-              </div>
-
-              {/* Текущая роль — компактная строка-переход */}
-              <button style={s.roleRow} onClick={() => goPage("profile")}>
-                <span style={s.roleRowIcon(s.hue(roleHue(activeRole)))}>
-                  <Icon name={currentRole.icon} size={22} strokeWidth={2.4} />
-                </span>
-                <span style={{ flex: 1, textAlign: "left" }}>
-                  <strong style={{ display: "block", fontSize: 13.5, color: t.text }}>{currentRole.title}</strong>
-                  <span style={{ fontSize: 11, color: t.sub }}>
-                    Ваша роль в сервисе
-                  </span>
-                </span>
-                <Icon name="arrowRight" size={15} style={{ color: t.sub }} />
-              </button>
-
-              <button
-                onClick={() => goPage("orders")}
-                style={{
-                  ...s.primaryDark,
-                  opacity: online && (work?.can_accept_orders ?? true) ? 1 : 0.55,
-                }}
-                disabled={!online || !(work?.can_accept_orders ?? true)}
-              >
-                <span style={s.liveDot(online && (work?.can_accept_orders ?? true))} />
-                {!online
-                  ? "Включите «Работаю»"
-                  : !(work?.can_accept_orders ?? true)
-                    ? (work?.status === "resting" ? "Отдых 6 часов" : "Доступ к заказам ограничен")
-                    : "Смотреть заказы"}
-              </button>
             </>
           )}
 
