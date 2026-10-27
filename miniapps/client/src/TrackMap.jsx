@@ -22,6 +22,7 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
   const mapRef = useRef(null);
   const markers = useRef({});
   const [ready, setReady] = useState(false);
+  const [attrOpen, setAttrOpen] = useState(false); // раскрытая строка © OSM
 
   useEffect(() => {
     let map;
@@ -160,13 +161,32 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
       border: `1px solid ${t.border}`,
     }}>
       <div ref={container} style={{ position: "absolute", inset: 0 }} />
-      <div aria-hidden="true" style={{
-        position: "absolute", left: 8, bottom: 8, zIndex: 2,
-        fontSize: 9.5, lineHeight: 1.3,
-        color: "rgba(60,60,67,.8)", background: "rgba(255,255,255,.75)",
-        borderRadius: 6, padding: "2px 6px",
-        pointerEvents: "none", userSelect: "none", WebkitUserSelect: "none",
-      }}>{OSM_ATTRIBUTION}</div>
+      {/* Копирайт OSM: значок ©, по тапу раскрывается строка */}
+      <button
+        type="button"
+        onClick={() => setAttrOpen(v => !v)}
+        aria-label="Авторство карты: OpenStreetMap"
+        style={{
+          position: "absolute", left: 8, bottom: 8, zIndex: 4,
+          width: 20, height: 20, borderRadius: "50%", padding: 0,
+          border: "none", cursor: "pointer",
+          background: "rgba(255,255,255,.82)", color: "rgba(60,60,67,.85)",
+          fontSize: 12, fontWeight: 700, lineHeight: 1,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: "0 1px 4px rgba(0,0,0,.18)",
+          fontFamily: "system-ui",
+        }}
+      >©</button>
+      {attrOpen && (
+        <div style={{
+          position: "absolute", left: 33, bottom: 8, zIndex: 4,
+          fontSize: 9.5, lineHeight: 1.3, whiteSpace: "nowrap",
+          color: "rgba(60,60,67,.85)", background: "rgba(255,255,255,.9)",
+          borderRadius: 6, padding: "3px 7px",
+          boxShadow: "0 1px 5px rgba(0,0,0,.18)",
+          userSelect: "none", WebkitUserSelect: "none",
+        }}>{OSM_ATTRIBUTION}</div>
+      )}
     </div>
   );
 }

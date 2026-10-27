@@ -2,6 +2,7 @@ import json
 import os
 import hmac
 import hashlib
+import secrets
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
@@ -265,11 +266,14 @@ def auth_executor(data: AuthIn, db: Session = Depends(get_db)):
     if not executor.active_role:
         executor.active_role = data.role
 
+    # Одна живая сессия: вход на новом телефоне разлогинивает предыдущий
+    executor.session_id = secrets.token_urlsafe(12)
+
     db.commit()
     db.refresh(executor)
 
     profile = executor_profile(db, executor)
-    profile["token"] = create_token(executor.id, "executor")
+    profile["token"] = create_token(executor.id, "executor", sid=executor.session_id)
     return profile
 
 @router.post("/executors/auth/contact")
@@ -294,13 +298,16 @@ def auth_executor_contact(data: ExecutorContactAuthIn, db: Session = Depends(get
     else:
         executor.phone = phone
 
+    # Одна живая сессия: подтверждение номера тоже начинает новую сессию
+    executor.session_id = secrets.token_urlsafe(12)
+
     db.commit()
     db.refresh(executor)
     return {
         "ok": True,
         "executor_id": executor.id,
         "phone": phone,
-        "token": create_token(executor.id, "executor"),
+        "token": create_token(executor.id, "executor", sid=executor.session_id),
     }
 
 

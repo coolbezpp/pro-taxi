@@ -53,9 +53,11 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const gpsRef = useRef(false); // был ли свежий GPS-fix
   const sentRef = useRef(0);   // когда последний раз шли позицию на сервер
   const [geoBlocked, setGeoBlocked] = useState(false); // геолокация запрещена
+  const [attrOpen, setAttrOpen] = useState(false);     // раскрытая строка © OSM
 
+  // Высота с учётом safe-area (iPhone): низ карты не заезжает под навбар
   const height = full
-    ? "calc(100dvh - 128px)"
+    ? "calc(100dvh - 128px - env(safe-area-inset-bottom, 0px))"
     : Math.min(330, Math.max(240, Math.round(window.innerHeight * 0.42)));
 
   // Ореол точности: радиус GPS в метрах → пиксели при текущем масштабе
@@ -249,15 +251,33 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           <path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3" />
         </svg>
       </button>
-      {/* Статичный неинтерактивный копирайт (pointer-events: none —
-          клик не открывает описание OpenStreetMap) */}
-      <div aria-hidden="true" style={{
-        position: "absolute", left: 8, bottom: 8, zIndex: 2,
-        fontSize: 9.5, lineHeight: 1.3,
-        color: "rgba(60,60,67,.8)", background: "rgba(255,255,255,.75)",
-        borderRadius: 6, padding: "2px 6px",
-        pointerEvents: "none", userSelect: "none", WebkitUserSelect: "none",
-      }}>{OSM_ATTRIBUTION}</div>
+      {/* Копирайт OSM (лицензия требует авторство): маленький значок ©
+          в углу карты — по тапу раскрывается строка, мешает кнопкам нет */}
+      <button
+        type="button"
+        onClick={() => setAttrOpen(v => !v)}
+        aria-label="Авторство карты: OpenStreetMap"
+        style={{
+          position: "absolute", left: 8, bottom: 8, zIndex: 4,
+          width: 20, height: 20, borderRadius: "50%", padding: 0,
+          border: "none", cursor: "pointer",
+          background: "rgba(255,255,255,.82)", color: "rgba(60,60,67,.85)",
+          fontSize: 12, fontWeight: 700, lineHeight: 1,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: "0 1px 4px rgba(0,0,0,.18)",
+          fontFamily: "system-ui",
+        }}
+      >©</button>
+      {attrOpen && (
+        <div style={{
+          position: "absolute", left: 33, bottom: 8, zIndex: 4,
+          fontSize: 9.5, lineHeight: 1.3, whiteSpace: "nowrap",
+          color: "rgba(60,60,67,.85)", background: "rgba(255,255,255,.9)",
+          borderRadius: 6, padding: "3px 7px",
+          boxShadow: "0 1px 5px rgba(0,0,0,.18)",
+          userSelect: "none", WebkitUserSelect: "none",
+        }}>{OSM_ATTRIBUTION}</div>
+      )}
       {geoBlocked && (
         <div style={{
           position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",

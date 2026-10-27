@@ -1113,8 +1113,8 @@ function ProfilePage({ s, t, summary, setting, choose, city, onCity, onSupport, 
 
   async function invite() {
     // Приглашение из профиля клиента ведёт в приложение исполнителя —
-    // так пользователи переходят в «Про» на стороне работы.
-    const url = "https://procityservice.ru/executor";
+    // нативная ссылка MAX открывает бота-исполнителя в мессенджере.
+    const url = "https://max.ru/se14320724_1_bot?startapp";
     const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй! " + url;
     try {
       const wb = window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;

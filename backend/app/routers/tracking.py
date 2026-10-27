@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..models import Client, Executor, Order, OrderEvent, OrderMessage, User, ExecutorVehicle
-from ..security import bearer_scheme
+from ..security import bearer_scheme, ensure_executor_session
 
 router = APIRouter(prefix="/api", tags=["tracking"])
 
@@ -58,6 +58,9 @@ def _require_participant(db: Session, order, payload: dict) -> str:
         except (TypeError, ValueError):
             raise HTTPException(status_code=401, detail="Некорректный токен")
         if order.executor_id and int(order.executor_id) == executor_id:
+            executor = db.query(Executor).get(executor_id)
+            if executor:
+                ensure_executor_session(payload, executor)
             return "executor"
         raise HTTPException(status_code=403, detail="Это не ваш заказ")
 
@@ -150,6 +153,9 @@ def update_position(
     executor = db.query(Executor).filter(Executor.id == executor_id).first()
     if not executor:
         raise HTTPException(404, "Исполнитель не найден")
+
+    # Одна живая сессия: токен с прошлого устройства позицию не пишет
+    ensure_executor_session(payload, executor)
 
     executor.last_lat = float(data.lat)
     executor.last_lon = float(data.lon)

@@ -23,9 +23,24 @@ def verify_password(p, h):
         return bcrypt.checkpw(str(p).encode("utf-8")[:72], (h or "").encode("utf-8"))
     except Exception:
         return False
-def create_token(user_id, role):
-    return jwt.encode({"sub":str(user_id),"role":role,"exp":datetime.utcnow()+timedelta(days=30)},settings.jwt_secret,algorithm="HS256")
+def create_token(user_id, role, sid=None):
+    payload = {"sub": str(user_id), "role": role, "exp": datetime.utcnow() + timedelta(days=30)}
+    # sid — идентификатор живой сессии исполнителя (только он и попадает
+    # в токен исполнителя; клиентские/админские токены sid не несут)
+    if sid:
+        payload["sid"] = sid
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def ensure_executor_session(payload: dict, executor) -> None:
+    """Одна живая сессия: токен, выданный на другом устройстве, недействителен."""
+    db_sid = getattr(executor, "session_id", None)
+    if db_sid and payload.get("sid") != db_sid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Выполнен вход на другом устройстве",
+        )
 
 
 # --- сессия администратора ---
@@ -259,4 +274,6 @@ def get_current_executor(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Исполнитель не найден",
         )
+    # Вход на новом телефоне аннулировал прошлую сессию
+    ensure_executor_session(payload, executor)
     return executor

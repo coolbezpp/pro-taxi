@@ -38,6 +38,7 @@ export default function TripMap({
 
   const [mode, setMode] = useState("from");
   const [ready, setReady] = useState(false);
+  const [attrOpen, setAttrOpen] = useState(false); // раскрытая строка © OSM
   const [busy, setBusy] = useState(false);
   const [locating, setLocating] = useState(false);
   const [route, setRoute] = useState(null);
@@ -300,13 +301,32 @@ export default function TripMap({
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", background: t.mapBg }}>
       <div ref={container} style={{ position: "absolute", inset: 0 }} />
-      <div aria-hidden="true" style={{
-        position: "absolute", left: 8, bottom: 8, zIndex: 6,
-        fontSize: 9.5, lineHeight: 1.3,
-        color: "rgba(60,60,67,.8)", background: "rgba(255,255,255,.75)",
-        borderRadius: 6, padding: "2px 6px",
-        pointerEvents: "none", userSelect: "none", WebkitUserSelect: "none",
-      }}>{OSM_ATTRIBUTION}</div>
+      {/* Копирайт OSM: значок ©, по тапу раскрывается строка */}
+      <button
+        type="button"
+        onClick={() => setAttrOpen(v => !v)}
+        aria-label="Авторство карты: OpenStreetMap"
+        style={{
+          position: "absolute", left: 8, bottom: 8, zIndex: 6,
+          width: 20, height: 20, borderRadius: "50%", padding: 0,
+          border: "none", cursor: "pointer",
+          background: "rgba(255,255,255,.82)", color: "rgba(60,60,67,.85)",
+          fontSize: 12, fontWeight: 700, lineHeight: 1,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: "0 1px 4px rgba(0,0,0,.18)",
+          fontFamily: "system-ui",
+        }}
+      >©</button>
+      {attrOpen && (
+        <div style={{
+          position: "absolute", left: 33, bottom: 8, zIndex: 6,
+          fontSize: 9.5, lineHeight: 1.3, whiteSpace: "nowrap",
+          color: "rgba(60,60,67,.85)", background: "rgba(255,255,255,.9)",
+          borderRadius: 6, padding: "3px 7px",
+          boxShadow: "0 1px 5px rgba(0,0,0,.18)",
+          userSelect: "none", WebkitUserSelect: "none",
+        }}>{OSM_ATTRIBUTION}</div>
+      )}
 
       <div style={{
         position: "absolute",

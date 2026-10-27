@@ -41,7 +41,9 @@ services:
     image: osrm/osrm-backend:v5.25.0
     container_name: osm-osrm
     restart: unless-stopped
-    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "1000", "/data/osrm"]
+    # База данных OSRM: в ./data/osrm лежат kkr.osrm.* → база внутри
+    # контейнера /data/kkr (старое /data/osrm давало /data/osrm.osrm.* и краш)
+    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "1000", "/data/kkr"]
     volumes:
       - ./data/osrm:/data
     mem_limit: 600m

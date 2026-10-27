@@ -2,6 +2,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
 import ContactGate from "./ContactGate.jsx";
+import MaxGate from "./MaxGate.jsx";
+import { isMaxEnv } from "./maxGate.js";
 
 // Миниап в MAX ведёт себя как нативное приложение: запрещаем выделение
 // текста и контекстное меню копирования. В полях ввода выделение работает.
@@ -12,8 +14,14 @@ guard.textContent =
 document.head.appendChild(guard);
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
+// Гейт «только MAX» — до всего рендера: вне мессенджера не показываем
+// ни контакт-гейт, ни приложение
 createRoot(document.getElementById("root")).render(
-  <ContactGate>
-    <App />
-  </ContactGate>
+  isMaxEnv() ? (
+    <ContactGate>
+      <App />
+    </ContactGate>
+  ) : (
+    <MaxGate />
+  )
 );

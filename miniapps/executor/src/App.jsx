@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api, setExecutorToken } from "./api.js";
+import { isMaxEnv } from "./maxGate.js";
+import MaxGate from "./MaxGate.jsx";
 import { useTheme, maxPalette } from "./theme.js";
 // maplibre (~600 КБ) — отдельный чанк, грузится только при открытии
 // карточки заказа с трекингом; стартовый экран стартует мгновенно.
@@ -1719,8 +1721,9 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
   const THEME_RU = { light: "Светлая", dark: "Тёмная", system: "Системная" };
 
   async function invite() {
-    // Ссылка на приложение исполнителя — чтобы приглашение вело сразу в «Про».
-    const url = "https://procityservice.ru/executor";
+    // Нативная ссылка MAX: открывает бота-исполнителя прямо в мессенджере
+    // (прямые ссылки на procityservice.ru в браузере гейт не пускает)
+    const url = "https://max.ru/se14320724_1_bot?startapp";
     const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй! " + url;
     try {
       const wb = window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;
@@ -2056,6 +2059,8 @@ export default function App() {
   const { setting, choose, t } = useTheme();
 
   const [role, setRole] = useState(localStorage.getItem("pro_role") || "");
+  // Токен аннулирован на сервере (вход с другого устройства) — экран кика
+  const [sessionKick, setSessionKick] = useState(null);
   // Навигация со стеком: кнопка «назад» телефона возвращает предыдущую страницу,
   // а не закрывает миниапп (см. эффект с WebApp.BackButton ниже)
   const [nav, setNav] = React.useState({ page: role ? "home" : "role", stack: [] });
@@ -2190,6 +2195,19 @@ export default function App() {
       });
     }
   }, [role]);
+
+  // API ответил 401 с живым токеном: вошли на другом устройстве или истёк
+  // токен. Показываем экран кика — без автовхода, иначе два телефона будут
+  // «отбирать» сессию друг у друга в цикле.
+  useEffect(() => {
+    const onKick = (e) => {
+      setSessionKick(
+        (e && e.detail && e.detail.message) || "Выполнен вход на другом устройстве"
+      );
+    };
+    window.addEventListener("pro:401", onKick);
+    return () => window.removeEventListener("pro:401", onKick);
+  }, []);
 
   async function loadOrders() {
     if (!online || !me) return;
@@ -2519,6 +2537,47 @@ export default function App() {
   const s = makeStyles(t);
   const m = maxPalette(t.mode);
 
+  // Миниапп исполнителя открывается только внутри мессенджера MAX
+  if (!isMaxEnv()) return <MaxGate />;
+
+  // Токен аннулирован — вход только вручную кнопкой (без автоповтора)
+  if (sessionKick) {
+    return (
+      <div style={{
+        minHeight: "100dvh", display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center", gap: 14,
+        padding: 28, textAlign: "center",
+        background: t.bg, color: t.text, fontFamily: "system-ui",
+      }}>
+        <div style={{
+          width: 64, height: 64, borderRadius: 20, background: t.accent,
+          color: "#fff", display: "flex", alignItems: "center",
+          justifyContent: "center", fontWeight: 900, fontSize: 30,
+        }}>П</div>
+        <h1 style={{ margin: 0, fontSize: 21, fontWeight: 900 }}>Сессия закрыта</h1>
+        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: t.sub, maxWidth: 330 }}>
+          {sessionKick}. Чтобы продолжить работу, войдите заново на этом телефоне.
+        </p>
+        <button
+          onClick={async () => {
+            const res = await authMax(role || "driver");
+            if (res) setSessionKick(null);
+          }}
+          style={{
+            padding: "13px 26px", borderRadius: 14, border: 0, cursor: "pointer",
+            background: t.cta, color: t.onCta, fontWeight: 850, fontSize: 15,
+          }}
+        >Войти заново</button>
+        {error ? (
+          <div style={{
+            fontSize: 12.5, color: t.danger, background: t.dangerSoft,
+            borderRadius: 12, padding: "9px 13px", maxWidth: 330,
+          }}>{error}</div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="pro-shell" style={s.shell}>
       <style>{`
@@ -2582,7 +2641,8 @@ export default function App() {
                   наши тайлы PMTiles Краснодарского края + живая геопозиция */}
               <React.Suspense fallback={
                 <div style={{
-                  height: "calc(100dvh - 128px)", margin: "0 -16px",
+                  height: "calc(100dvh - 128px - env(safe-area-inset-bottom, 0px))",
+                  margin: "0 -16px",
                   background: t.mapBg,
                 }} />
               }>

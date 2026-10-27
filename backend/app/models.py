@@ -230,6 +230,9 @@ class Executor(Base):
     last_lat = Column(Float, nullable=True)
     last_lon = Column(Float, nullable=True)
     last_seen_at = Column(DateTime, nullable=True)
+    # Одна живая сессия входа: при логине на новом телефоне создаётся новый
+    # sid (лежит в токене) — токен со старым sid сразу перестаёт действовать
+    session_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
