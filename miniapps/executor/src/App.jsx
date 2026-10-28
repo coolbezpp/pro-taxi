@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api, setExecutorToken } from "./api.js";
 import { isMaxEnv } from "./maxGate.js";
+import { getDeviceId } from "./deviceId.js";
 import MaxGate from "./MaxGate.jsx";
 import { useTheme, maxPalette } from "./theme.js";
 // maplibre (~600 КБ) — отдельный чанк, грузится только при открытии
@@ -2166,7 +2167,7 @@ export default function App() {
 
       const res = await api("/executors/auth", {
         method: "POST",
-        body: JSON.stringify({ initData, role: roleId })
+        body: JSON.stringify({ initData, role: roleId, deviceId: getDeviceId() })
       });
 
       if (res?.token) setExecutorToken(res.token);

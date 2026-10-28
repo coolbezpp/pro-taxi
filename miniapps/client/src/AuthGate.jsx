@@ -66,6 +66,21 @@ export default function AuthGate({ children }) {
       return;
     }
 
+    // Идентификатор устройства — сервер помнит, с каких телефонов
+    // заходили аккаунты (антифрод «свой–чужой»), сам IP не хранится
+    let deviceId = null;
+    try {
+      deviceId = localStorage.getItem("pro_device_id");
+      if (!deviceId) {
+        deviceId = (window.crypto && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem("pro_device_id", deviceId);
+      }
+    } catch (e) {
+      // приватный режим — просто без идентификатора
+    }
+
     setBusy(true);
     setError("");
 
@@ -87,7 +102,8 @@ export default function AuthGate({ children }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           init_data: initData,
-          contact
+          contact,
+          device_id: deviceId
         })
       });
 

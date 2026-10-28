@@ -1,4 +1,5 @@
 import CityZones from "./CityZones";
+import Fraud from "./Fraud";
 import { useEffect, useState } from "react";
 
 const API = "/api";
@@ -221,6 +222,12 @@ const ICON_PATHS = {
       <circle cx="12" cy="13.5" r="3.6" />
     </>
   ),
+  shield: (
+    <>
+      <path d="M12 3l7 2.8v5.4c0 4.4-3 8-7 9.8-4-1.8-7-5.4-7-9.8V5.8L12 3z" />
+      <path d="M9 12l2 2 4-4" />
+    </>
+  ),
   mega: (
     <>
       <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" />
@@ -313,6 +320,7 @@ const MENU = [
   { id: "clients", icon: "person", title: "Клиенты", count: "clients" },
   { id: "executors", icon: "car", title: "Исполнители", count: "executors" },
   { id: "photo-checks", icon: "camera", title: "Фотоконтроль", count: "photoChecks" },
+  { id: "fraud", icon: "shield", title: "Антифрод" },
   { id: "notifications", icon: "bell", title: "Уведомления", count: "messages" },
   { id: "ads", icon: "mega", title: "Реклама" },
   { id: "city-zones", icon: "map", title: "Городские зоны", adminOnly: true },
@@ -323,7 +331,7 @@ const MENU = [
 // У оператора свой список вкладок: диспетчерская работа без админских разделов
 const OPERATOR_TABS = [
   "orders", "clients", "executors", "photo-checks",
-  "notifications", "ads", "dashboard",
+  "notifications", "ads", "dashboard", "fraud",
 ];
 
 // Типы фото-контроля (как у конкурентов: авто, документы, селфи, номер)
@@ -341,6 +349,7 @@ const PAGE_INFO = {
   clients: ["Клиенты", "База клиентов, балансы и контакты"],
   executors: ["Исполнители", "Такси, курьеры, мастера и их балансы"],
   "photo-checks": ["Фотоконтроль", "Запросы фото и решения модератора"],
+  fraud: ["Антифрод", "Пары «клиент:исполнитель» с подозрением на накрутку"],
   notifications: ["Уведомления", "Чаты с клиентами и исполнителями, служебные события"],
   ads: ["Реклама", "Блоки предложений на главной клиентского миниаппа"],
   jobs: ["Вакансии", "Модерация объявлений о работе"],
@@ -1410,6 +1419,7 @@ export default function App() {
         </div>
 
         {tab === "city-zones" && <CityZones />}
+        {tab === "fraud" && <Fraud />}
 
         {tab === "orders" && (
           <div>

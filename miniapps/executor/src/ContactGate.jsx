@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useTheme } from "./theme.js";
 import { setExecutorToken } from "./api.js";
+import { getDeviceId } from "./deviceId.js";
 
 function getWebApp() {
   return (
@@ -59,6 +60,7 @@ export default function ContactGate({ children }) {
         body: JSON.stringify({
           initData: getInitData(),
           contact,
+          deviceId: getDeviceId(),
         }),
       });
 

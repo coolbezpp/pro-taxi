@@ -321,6 +321,9 @@ class Client(Base):
     balance = Column(Float, default=0)
     # Рейтинг «батареей»: процент like за последние 100 оценённых заказов
     rating_percent = Column(Integer, nullable=True, default=100)
+    # Антифрод: подтверждённый фрод пары — запрет новых заказов
+    # (снимается оператором через false_positive)
+    blocked = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -398,6 +401,68 @@ class Ad(Base):
     active = Column(Boolean, nullable=False, default=True)
     position = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class DeviceSession(Base):
+    """Устройство входа — опора антифрода «свой–чужой» (docs/ANTIFRAUD.md).
+
+    device_id генерируется в localStorage миниаппа; сам IP не храним —
+    только sha256(ip + серверный секрет), чтобы сравнивать кластера.
+    """
+
+    __tablename__ = "device_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_max_id = Column(String, index=True, nullable=False)
+    role = Column(String, nullable=False)              # client | executor
+    device_id = Column(String, index=True, nullable=False)
+    ip_hash = Column(String, nullable=True)
+    ua_hash = Column(String, nullable=True)
+    first_seen = Column(DateTime, server_default=func.now())
+    last_seen = Column(DateTime, server_default=func.now())
+
+
+class FraudSignal(Base):
+    """Сработавший сигнал пары клиент:исполнитель.
+
+    На (pair_key, code) — один активный ряд: при пересчёте живой сигнал
+    обновляется, снятый остаётся в журнале с active=False.
+    """
+
+    __tablename__ = "fraud_signals"
+
+    id = Column(Integer, primary_key=True)
+    pair_key = Column(String, index=True, nullable=False)
+    order_id = Column(Integer, nullable=True)
+    code = Column(String, nullable=False)
+    weight = Column(Float, nullable=False, default=0)
+    meta = Column(JSON, default=dict)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class FraudReview(Base):
+    """Очередь на проверку: одна строка на пару — риск и решение человека.
+
+    Автобанов нет: статусы open → review → under_review ставит скор,
+    confirmed / false_positive — только оператор (docs/ANTIFRAUD.md §4–5).
+    """
+
+    __tablename__ = "fraud_reviews"
+
+    id = Column(Integer, primary_key=True)
+    pair_key = Column(String, unique=True, index=True, nullable=False)
+    client_id = Column(Integer, nullable=True)
+    executor_id = Column(Integer, nullable=True)
+    risk_score = Column(Float, nullable=False, default=0)
+    status = Column(String, nullable=False, default="open")
+    # «Семья/компания»: пара проверена и больше не беспокоит
+    allowlisted = Column(Boolean, nullable=False, default=False)
+    resolved_by = Column(String, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
 
 
 

@@ -4,7 +4,7 @@ import hmac
 import hashlib
 import secrets
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from ..config import settings
 from ..security import bearer_scheme, create_token, get_admin, get_staff, get_current_executor
 from .. import worktime, rating
 from ..services.max_notify import send_max_message
+from ..services import antifraud
 
 router = APIRouter(prefix="/api", tags=["executors"])
 
@@ -60,6 +61,8 @@ def _available_months(now: datetime):
 class AuthIn(BaseModel):
     initData: str
     role: str
+    # Устройство входа (localStorage миниаппа) — антифрод «свой–чужой»
+    deviceId: str | None = None
 
 class RoleIn(BaseModel):
     role: str
@@ -68,6 +71,8 @@ class RoleIn(BaseModel):
 class ExecutorContactAuthIn(BaseModel):
     initData: str
     contact: dict
+    # Устройство входа (localStorage миниаппа) — антифрод «свой–чужой»
+    deviceId: str | None = None
 
 
 class PhotoCheckIn(BaseModel):
@@ -245,7 +250,7 @@ def _require_same(executor: Executor, executor_id: int):
 
 
 @router.post("/executors/auth")
-def auth_executor(data: AuthIn, db: Session = Depends(get_db)):
+def auth_executor(data: AuthIn, request: Request, db: Session = Depends(get_db)):
     if data.role not in ROLES:
         raise HTTPException(400, "Неизвестная роль")
 
@@ -272,12 +277,16 @@ def auth_executor(data: AuthIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(executor)
 
+    # Антифрод: запоминаем устройство исполнителя (сигнал same_device_pair,
+    # кластера IP). Ошибка здесь не ломает вход.
+    antifraud.record_device_session(db, request, str(max_id), "executor", data.deviceId)
+
     profile = executor_profile(db, executor)
     profile["token"] = create_token(executor.id, "executor", sid=executor.session_id)
     return profile
 
 @router.post("/executors/auth/contact")
-def auth_executor_contact(data: ExecutorContactAuthIn, db: Session = Depends(get_db)):
+def auth_executor_contact(data: ExecutorContactAuthIn, request: Request, db: Session = Depends(get_db)):
     max_id = _validate_executor_init_data(data.initData)
     phone = _validate_executor_contact(data.contact, max_id)
 
@@ -303,6 +312,10 @@ def auth_executor_contact(data: ExecutorContactAuthIn, db: Session = Depends(get
 
     db.commit()
     db.refresh(executor)
+
+    # Антифрод: устройство при первом входе по номеру — тоже запоминаем
+    antifraud.record_device_session(db, request, str(max_id), "executor", data.deviceId)
+
     return {
         "ok": True,
         "executor_id": executor.id,

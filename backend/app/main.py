@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from app.config import settings
 from app.db import get_db
 from app import models, pricing, worktime, rating
+from app.services import antifraud
 from app.security import create_token, hash_password, verify_password, get_current_user, get_staff
 from pydantic import BaseModel
 app=FastAPI(title="Pro API")
@@ -81,6 +82,8 @@ from urllib.parse import parse_qsl
 class MaxMiniAppAuthIn(BaseModel):
     init_data: str
     contact: dict
+    # Устройство входа (localStorage миниаппа) — антифрод «свой–чужой»
+    device_id: str | None = None
 
 
 # PRO_MAX_AUTH_FIX_1
@@ -241,6 +244,7 @@ def _validate_max_contact(
 @app.post("/api/auth/max/miniapp")
 def auth_max_miniapp(
     data: MaxMiniAppAuthIn,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     identity = _validate_max_init_data(data.init_data)
@@ -282,6 +286,12 @@ def auth_max_miniapp(
         if not client.name:
             client.name = user.phone
         db.commit()
+
+    # Антифрод: запоминаем устройство клиента (сигнал same_device_pair,
+    # кластера IP). Ошибка здесь не ломает вход.
+    antifraud.record_device_session(
+        db, request, user.max_user_id, "client", data.device_id
+    )
 
     return {
         "token": create_token(user.id, user.role),
@@ -368,6 +378,12 @@ def create_order(data: OrderIn, db: Session=Depends(get_db), user=Depends(get_cu
 
 def _create_order_internal(db: Session, data: OrderIn, client):
     """Расчёт цены и создание заказа — общий путь для клиента и оператора."""
+    # Антифрод: подтверждённый фрод пары — запрет новых заказов (решение
+    # оператора, снимается через false_positive в очереди антифрода)
+    if client is not None and getattr(client, "blocked", False):
+        raise HTTPException(
+            403, "Заказы временно недоступны — обратитесь в поддержку"
+        )
     service = (data.service or "taxi").strip().lower()
     if service not in ("taxi", "cargo", "tech_help"):
         raise HTTPException(400, "Сервис недоступен")
@@ -751,6 +767,10 @@ def available_orders(executor_id: int, role: str, db: Session = Depends(get_db))
         # Анти-самозаказы: свои заказы не показываем в пуле
         if self_order_blocked(db, o, executor):
             continue
+        # Антифрод: пара под подозрением (60+) — заказ в ленту не попадает,
+        # ручной поиск остаётся у оператора
+        if o.client_id and antifraud.pair_under_review(db, o.client_id, executor_id):
+            continue
         meta = dict(o.meta or {})
         if (o.service or "") == "master":
             ms_id = meta.get("master_service_id")
@@ -797,6 +817,11 @@ def assign(order_id:int, executor_id:int, db: Session=Depends(get_db)):
     so = self_order_blocked(db, o, executor)
     if so:
         raise HTTPException(403, so)
+
+    # Антифрод: пара под подозрением (60+) — автоматическое назначение
+    # запрещено, остаётся ручной поиск у оператора
+    if o.client_id and antifraud.pair_under_review(db, o.client_id, executor_id):
+        raise HTTPException(403, "Заказ на проверке — недоступен для принятия")
 
     # Контроль рабочего времени: нельзя принять заказ при лимите 12 ч или во время отдыха
     work = worktime.work_state(db, executor_id)
@@ -866,6 +891,9 @@ def assign(order_id:int, executor_id:int, db: Session=Depends(get_db)):
 
     db.commit()
 
+    # Антифрод: назначение — событие для пересчёта сигналов пары
+    antifraud.evaluate_pair(db, o.client_id, o.executor_id)
+
     send_max_message(
         executor.max_id,
         f"Новый заказ №{o.id}: {o.from_address} → {o.to_address}, {o.total_price} ₽. Откройте миниап исполнителя.",
@@ -926,6 +954,9 @@ def complete(order_id:int, db: Session=Depends(get_db)):
         ))
         worktime.touch_session(db, executor.id)
     db.add(models.OrderEvent(order_id=o.id,event="completed",payload={"payout":payout,"commission":o.commission_amount})); db.commit(); db.refresh(o)
+
+    # Антифрод: завершение — событие для пересчёта сигналов пары
+    antifraud.evaluate_pair(db, o.client_id, o.executor_id)
 
     if o.client_id:
         client=db.query(models.Client).get(o.client_id)
@@ -1040,6 +1071,8 @@ def rate(
             if rated_client:
                 quality = rating.update_client_rating(db, rated_client)
         db.commit()
+        # Антифрод: оценка — событие для пересчёта сигналов пары
+        antifraud.evaluate_pair(db, o.client_id, o.executor_id)
         result = {"ok": True, "by": kind, "target_id": target_id, "changed": True}
         if quality:
             result["rating"] = {"percent": quality["percent"]}
@@ -1070,6 +1103,8 @@ def rate(
             quality = rating.update_client_rating(db, rated_client)
 
     db.commit()
+    # Антифрод: оценка — событие для пересчёта сигналов пары
+    antifraud.evaluate_pair(db, o.client_id, o.executor_id)
     result = {"ok": True, "by": kind, "target_id": target_id}
     if quality:
         result["rating"] = {"percent": quality["percent"]}
@@ -1572,6 +1607,9 @@ def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = De
     order.status = "cancelled"
     db.commit()
 
+    # Антифрод: отмена — событие для пересчёта сигналов пары
+    antifraud.evaluate_pair(db, order.client_id, order.executor_id)
+
     if order.executor_id:
         executor = db.query(models.Executor).filter(
             models.Executor.id == order.executor_id
@@ -1746,7 +1784,9 @@ def executor_available_orders(
 
     # Анти-самозаказы: свои заказы не показываем в пуле
     orders = [o for o in query.order_by(models.Order.id.desc()).limit(50).all()
-              if not self_order_blocked(db, o, executor)]
+              if not self_order_blocked(db, o, executor)
+              # Антифрод: пара под подозрением (60+) — не показываем
+              and not (o.client_id and antifraud.pair_under_review(db, o.client_id, executor.id))]
 
     return {"orders": [{
         "id": o.id,
@@ -2837,6 +2877,10 @@ app.include_router(order_chain_router, prefix="/api")
 # заблокирован самим приложением — см. routers/maxhook.py)
 from .routers.maxhook import router as maxhook_router, subscribe_webhooks
 app.include_router(maxhook_router)
+
+# Антифрод: очередь оператора (docs/ANTIFRAUD.md) — вкладка в pro/admin
+from .routers.fraud import router as fraud_router
+app.include_router(fraud_router)
 
 
 @app.on_event("startup")
