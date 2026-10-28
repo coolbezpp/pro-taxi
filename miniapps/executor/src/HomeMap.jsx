@@ -52,8 +52,10 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const accRef = useRef(40);   // точность последнего fix, метры
   const gpsRef = useRef(false); // был ли свежий GPS-fix
   const sentRef = useRef(0);   // когда последний раз шли позицию на сервер
+  const watchIdRef = useRef(null); // id watchPosition (чтобы не дублировать)
   const [geoBlocked, setGeoBlocked] = useState(false); // геолокация запрещена
   const [attrOpen, setAttrOpen] = useState(false);     // раскрытая строка © OSM
+  const [approx, setApprox] = useState(false);         // точка примерная (по IP)
 
   // Высота с учётом safe-area (iPhone): низ карты не заезжает под навбар
   const height = full
@@ -96,10 +98,41 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     resizeHalo();
   };
 
+  // GPS-watch: первый fix подлетает к реальной точке и снимает «примерную»
+  // метку. Вынесено в функцию — кнопка «Определить точно» и кнопка «показать
+  // меня» перезапрашивают позицию (на iOS запрос разрешения работает по жесту)
+  const startGeo = () => {
+    const map = mapRef.current;
+    if (!map || watchIdRef.current != null || !navigator.geolocation) return;
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      pos => {
+        const lon = pos.coords.longitude;
+        const lat = pos.coords.latitude;
+        ensureMarker(lon, lat, pos.coords.accuracy);
+        setGeoBlocked(false);
+        setApprox(false);
+        try { markerRef.current?.getElement()?.classList.remove("pro-home-approx"); } catch (e) {}
+        if (!gpsRef.current) {
+          gpsRef.current = true;
+          map.flyTo({ center: [lon, lat], zoom: 13.8, duration: 1000 });
+        }
+        const now = Date.now();
+        if (onPosition && now - sentRef.current > 60000) {
+          sentRef.current = now;
+          onPosition(lat, lon);
+        }
+      },
+      err => {
+        // code 1 — пользователь запретил доступ к геолокации
+        if (err && err.code === 1) setGeoBlocked(true);
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    );
+  };
+
   useEffect(() => {
     let map;
     let observer;
-    let watchId;
     let hintTimer;
     try {
       map = new Map({
@@ -128,27 +161,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
 
       // Свежая геопозиция без кэша: первый fix всегда подлетает к реальной
       // точке (даже если профиль прислал устаревшую), дальше — обновление
-      if (navigator.geolocation) {
-        watchId = navigator.geolocation.watchPosition(
-          pos => {
-            const lon = pos.coords.longitude;
-            const lat = pos.coords.latitude;
-            ensureMarker(lon, lat, pos.coords.accuracy);
-            setGeoBlocked(false);
-            if (!gpsRef.current) {
-              gpsRef.current = true;
-              map.flyTo({ center: [lon, lat], zoom: 13.8, duration: 1000 });
-            }
-            const now = Date.now();
-            if (onPosition && now - sentRef.current > 60000) {
-              sentRef.current = now;
-              onPosition(lat, lon);
-            }
-          },
-          () => {},
-          { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-        );
-      }
+      startGeo();
 
       // Разрешение на геолокацию отозвано — предупредим прямо на карте
       try {
@@ -161,12 +174,17 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       } catch (e) {}
 
       // GPS молчит (нет разрешения / спутники не ловятся) — через 7 секунд
-      // берём примерные координаты по IP провайдера доступа
+      // берём примерные координаты по IP провайдера доступа. Метка сразу
+      // помечается как примерная: провайдер определяется по центру региона,
+      // реальный город может быть другим — покажем баннер с кнопкой
+      // «Определить точно»
       hintTimer = setTimeout(async () => {
         if (gpsRef.current || markerRef.current) return;
         const hint = await ipHint();
         if (!hint || gpsRef.current || markerRef.current || !mapRef.current) return;
         ensureMarker(hint.lon, hint.lat, 3500);
+        setApprox(true);
+        try { markerRef.current?.getElement()?.classList.add("pro-home-approx"); } catch (e) {}
         mapRef.current.flyTo({ center: [hint.lon, hint.lat], zoom: 10.8, duration: 900 });
       }, 7000);
     } catch (e) {
@@ -174,8 +192,9 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     }
     return () => {
       clearTimeout(hintTimer);
-      if (watchId != null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchId);
+      if (watchIdRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
       observer?.disconnect();
       map?.remove();
@@ -203,6 +222,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     const map = mapRef.current;
     const marker = markerRef.current;
     if (!map) return;
+    // Точка примерная (по IP) — жест «показать меня» просит точный GPS
+    if (approx) startGeo();
     if (marker) {
       const c = marker.getLngLat();
       map.flyTo({
@@ -289,6 +310,29 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           Геопозиция запрещена — разрешите доступ в настройках телефона
         </div>
       )}
+      {/* Точка по IP-адресу провайдера — честно помечаем как примерную
+          (провайдер часто определяется по центру региона, а не по городу) */}
+      {approx && !geoBlocked && (
+        <div style={{
+          position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
+          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 8px 6px 13px",
+          borderRadius: 999, background: "rgba(255,255,255,.94)", color: "#3a4048",
+          fontSize: 11, fontWeight: 750, textAlign: "center", lineHeight: 1.35,
+          boxShadow: "0 6px 16px rgba(0,0,0,.22)",
+          display: "flex", alignItems: "center", gap: 9, whiteSpace: "nowrap",
+        }}>
+          Примерное место (по IP)
+          <button
+            type="button"
+            onClick={startGeo}
+            style={{
+              border: 0, cursor: "pointer", borderRadius: 999,
+              padding: "5px 11px", fontSize: 11, fontWeight: 800,
+              background: "#2f7bff", color: "#fff", fontFamily: "inherit",
+            }}
+          >Определить точно</button>
+        </div>
+      )}
       <style>{`
         @keyframes proDotPulse {
           0% { box-shadow: 0 0 0 0 rgba(47,123,255,.35); }
@@ -309,6 +353,14 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           width: 18px; height: 18px; border-radius: 50%;
           background: #2f7bff; border: 3px solid #fff;
           animation: proDotPulse 2.2s infinite;
+        }
+        /* Примерная точка (по IP): серая, с пунктирным ореолом */
+        .pro-home-approx .pro-home-core {
+          background: #98a2b3; animation: none;
+        }
+        .pro-home-approx .pro-home-halo {
+          background: rgba(152,162,179,.16);
+          border: 1px dashed rgba(152,162,179,.6);
         }
       `}</style>
     </div>

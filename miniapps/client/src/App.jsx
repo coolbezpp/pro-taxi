@@ -1112,10 +1112,12 @@ function ProfilePage({ s, t, summary, setting, choose, city, onCity, onSupport, 
   const THEME_RU = { light: "Светлая", dark: "Тёмная", system: "Системная" };
 
   async function invite() {
-    // Приглашение из профиля клиента ведёт в приложение исполнителя —
-    // нативная ссылка MAX открывает бота-исполнителя в мессенджере.
-    const url = "https://max.ru/se14320724_1_bot?startapp";
-    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй! " + url;
+    // Приглашение из профиля клиента ведёт в клиентский миниапп —
+    // друзья заказывают услуги; нативная ссылка MAX открывает бота.
+    // В share ссылка передаётся отдельным полем — в тексте её не дублируем,
+    // иначе в чате вылезает два одинаковых адреса.
+    const url = "https://max.ru/se14320724_bot?startapp";
+    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера. Заказывай!";
     try {
       const wb = window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;
       if (wb?.share) {
@@ -1126,7 +1128,7 @@ function ProfilePage({ s, t, summary, setting, choose, city, onCity, onSupport, 
         await navigator.share({ title: "Про", text, url });
         return;
       }
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(text + " " + url);
       alert("Скопировано в буфер обмена");
     } catch (e) {
       // отменили системное окно — это нормально

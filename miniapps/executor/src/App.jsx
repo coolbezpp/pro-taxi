@@ -1722,9 +1722,11 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
 
   async function invite() {
     // Нативная ссылка MAX: открывает бота-исполнителя прямо в мессенджере
-    // (прямые ссылки на procityservice.ru в браузере гейт не пускает)
+    // (прямые ссылки на procityservice.ru в браузере гейт не пускает).
+    // В share ссылка передаётся отдельным полем — в тексте её не дублируем,
+    // иначе в чате вылезает два одинаковых адреса.
     const url = "https://max.ru/se14320724_1_bot?startapp";
-    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй! " + url;
+    const text = "«Про» — сервисы города: такси, курьер, грузовое, мастера и работа. Попробуй!";
     try {
       const wb = window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;
       if (wb?.share) {
@@ -1735,7 +1737,7 @@ function ProfileExecutor({ me, t, setting, choose, activeRole, earnings, unread,
         await navigator.share({ title: "Про", text, url });
         return;
       }
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(text + " " + url);
       alert("Скопировано в буфер обмена");
     } catch (e) {
       // отменили системное окно — это нормально
