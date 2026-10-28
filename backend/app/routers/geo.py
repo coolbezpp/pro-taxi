@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import math
 import os
 import time
@@ -215,3 +217,27 @@ async def search_places(q: str, lat: float | None = None, lon: float | None = No
                 return results
 
     raise HTTPException(503, "Поиск адресов временно недоступен")
+
+
+_log = logging.getLogger("pro.geo.diag")
+
+
+class DiagIn(BaseModel):
+    # Произвольный отчёт вебвью: что видит JS (мост MAX, разрешения, GPS)
+    data: dict = Field(default_factory=dict)
+
+
+@router.post("/diag")
+async def geo_diag(payload: DiagIn):
+    """Разовая диагностика гео в вебвью MAX.
+
+    Миниапп шлёт сюда результаты пробы: жив ли нативный мост SDK
+    (WebAppGetViewportSize), отвечает ли запрос права location, что
+    возвращает navigator.geolocation (фикс / код ошибки / молчание).
+    Читаем в логах: docker compose logs api | grep GEO_DIAG
+    """
+    raw = json.dumps(payload.data, ensure_ascii=False, default=str)
+    if len(raw) > 6000:
+        raise HTTPException(413, "Отчёт диагностики слишком большой")
+    _log.warning("GEO_DIAG %s", raw)
+    return {"ok": True}

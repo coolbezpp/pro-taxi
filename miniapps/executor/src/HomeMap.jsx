@@ -66,7 +66,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const [approx, setApprox] = useState(false);         // точка примерная (по IP)
   const [approxCity, setApproxCity] = useState("");    // город из IP-сервиса
   const [geoPending, setGeoPending] = useState(false); // ждём GPS-fix после запроса
-  const [pickMode, setPickMode] = useState(false);     // режим «укажите место вручную»
+  const [diagRun, setDiagRun] = useState(false);       // идёт диагностика GPS
+  const [diagText, setDiagText] = useState("");        // короткий итог диагностики
   const [noPos, setNoPos] = useState(false);           // ни GPS, ни IP не ответили
 
   // Высота с учётом safe-area (iPhone): низ карты не заезжает под навбар
@@ -146,33 +147,131 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     );
   };
 
-  // Ручное указание места: GPS в вебвью MAX не работает (в SDK нет моста
-  // к системной геолокации), поэтому исполнитель сам ставит точку —
-  // тащит карту под неподвижный прицел и жмёт «Сохранить»
-  const startPick = () => {
-    setPickMode(true);
-    const map = mapRef.current;
-    if (map) {
-      map.flyTo({ center: map.getCenter(), zoom: Math.max(map.getZoom(), 13.5), duration: 500 });
+  // Ручной выбор места («я здесь») удалён по решению пользователя —
+  // место должно определяться внутри миниаппа. Осталась диагностика GPS:
+  // собираем, что видит страница в вебвью MAX, шлём на сервер (лог
+  // GEO_DIAG) и показываем короткий итог — пересказывать мелкий текст
+  // с телефона не придётся
+  const geoDiag = async () => {
+    const out = {};
+    try { out.ua = (navigator.userAgent || "").slice(0, 160); } catch (e) {}
+    try { out.iframe = window.self !== window.top; } catch (e) {}
+    // Каким транспортом ходят события в натив: Android-мост, iframe или
+    // ничего (fallback в SDK просто пишет в консоль — тогда мост мёртв)
+    try { out.wvh = !!window.WebViewHandler; } catch (e) {}
+    try {
+      out.webkit = window.webkit && window.webkit.messageHandlers
+        ? Object.keys(window.webkit.messageHandlers) : null;
+    } catch (e) { out.webkit = "err"; }
+    const W = window.WebApp;
+    out.sdk = !!W;
+    if (W) {
+      try { out.platform = W.platform; } catch (e) {}
+      try { out.ver = W.version; } catch (e) {}
+      try { out.qid = !!(W.initDataUnsafe && W.initDataUnsafe.query_id); } catch (e) {}
+      // Сырой запрос права «location» — вдруг нативная сторона умеет больше,
+      // чем обёртка SDK (в ней захардкожены только camera/mic)
+      try {
+        out.permRaw = await Promise.race([
+          W.requestController.createRequest(
+            "WebAppPermissionsRequestAccess",
+            { permissions: [{ location: true }], reason: "Диагностика геолокации" },
+            { timeout: 5000 }
+          ).then(r => "ok " + JSON.stringify(r))
+            .catch(e => "err " + JSON.stringify((e && e.error) || e)),
+          new Promise(r => setTimeout(() => r("timeout"), 6000)),
+        ]);
+      } catch (e) { out.permRaw = "throw " + String(e); }
+      // Нативный запрос вьюпорта без UI: отвечает — события SDK доходят
+      try {
+        out.viewport = await Promise.race([
+          Promise.resolve(W.getViewportSize())
+            .then(r => "ok " + JSON.stringify(r))
+            .catch(e => "err " + JSON.stringify((e && e.error) || e)),
+          new Promise(r => setTimeout(() => r("timeout"), 5000)),
+        ]);
+      } catch (e) { out.viewport = "throw " + String(e); }
     }
+    try {
+      out.permQuery = navigator.permissions && navigator.permissions.query
+        ? (await navigator.permissions.query({ name: "geolocation" })).state
+        : "n/a";
+    } catch (e) { out.permQuery = "err " + String(e && e.message); }
+    // Сам GPS: фикс / код ошибки / полное молчание (таймаут молчания 9с)
+    out.geo = await new Promise(res => {
+      if (!navigator.geolocation) { res("no-api"); return; }
+      let done = false;
+      const fin = v => { if (!done) { done = true; res(v); } };
+      try {
+        navigator.geolocation.getCurrentPosition(
+          p => fin(`ok ${p.coords.latitude.toFixed(4)},${p.coords.longitude.toFixed(4)} ±${Math.round(p.coords.accuracy)}m`),
+          e => fin(`err code=${e.code} ${e.message || ""}`),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+        );
+      } catch (e) { fin("throw " + String(e)); }
+      setTimeout(() => fin("silent"), 9000);
+    });
+    try {
+      out.globals = Object.keys(window)
+        .filter(k => /webview|miniapp|bridge|handler|oneme|tgwebview/i.test(k))
+        .slice(0, 25);
+    } catch (e) {}
+    return out;
   };
 
-  const savePick = () => {
-    const map = mapRef.current;
-    if (!map) return;
-    const c = map.getCenter();
-    setPickMode(false);
-    ensureMarker(c.lng, c.lat, 30);
-    setApprox(false);
-    setApproxCity("");
-    setNoPos(false);
-    setGeoBlocked(false);
-    try { markerRef.current?.getElement()?.classList.remove("pro-home-approx"); } catch (e) {}
-    // Третий аргумент force — ручное сохранение не ждёт троттлинг
-    if (onPosition) {
-      sentRef.current = Date.now();
-      onPosition(c.lat, c.lng, true);
-    }
+  const diagSummary = d => {
+    const gps = d.geo === "silent" ? "GPS молчит"
+      : String(d.geo || "").startsWith("ok") ? "GPS ответил!"
+      : `GPS: ${String(d.geo || "?").replace("err ", "")}`;
+    const bridge = String(d.viewport || "").startsWith("ok") ? "мост MAX работает"
+      : String(d.viewport || "").startsWith("timeout") ? "мост MAX молчит"
+      : d.sdk === false ? "SDK MAX не загрузился"
+      : `мост: ${d.viewport || "?"}`;
+    const perm = String(d.permRaw || "").startsWith("ok") ? " · право location ОК" : "";
+    return `${gps} · ${bridge}${perm}`;
+  };
+
+  // Тап «Определить точно»: пробуем GPS, а если через 7 секунд фикса нет —
+  // собираем диагностику вебвью и шлём её на сервер
+  const diagTimerRef = useRef(null);
+  const onGeoPress = () => {
+    startGeo();
+    if (diagTimerRef.current != null) return;
+    diagTimerRef.current = setTimeout(async () => {
+      diagTimerRef.current = null;
+      if (gpsRef.current) return; // GPS ожил — диагностика не нужна
+      setDiagRun(true);
+      let d;
+      try { d = await geoDiag(); } catch (e) { d = { err: String(e) }; }
+      setDiagRun(false);
+      try {
+        fetch("/api/geo/diag", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: d }),
+        }).catch(() => {});
+      } catch (e) {}
+      // Вдруг getCurrentPosition дал фикс, а watchPosition — нет
+      const m = String(d.geo || "").match(/ok ([-\d.]+),([-\d.]+)/);
+      if (m && mapRef.current) {
+        const lat = Number(m[1]);
+        const lon = Number(m[2]);
+        ensureMarker(lon, lat, null);
+        setApprox(false);
+        setApproxCity("");
+        setNoPos(false);
+        setGeoBlocked(false);
+        gpsRef.current = true;
+        try { markerRef.current?.getElement()?.classList.remove("pro-home-approx"); } catch (e) {}
+        mapRef.current.flyTo({ center: [lon, lat], zoom: 13.8, duration: 800 });
+        if (onPosition) {
+          sentRef.current = Date.now();
+          onPosition(lat, lon, true);
+        }
+        return;
+      }
+      setDiagText(diagSummary(d));
+    }, 7000);
   };
 
   useEffect(() => {
@@ -243,6 +342,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     }
     return () => {
       clearTimeout(hintTimer);
+      if (diagTimerRef.current != null) clearTimeout(diagTimerRef.current);
       if (watchIdRef.current != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
@@ -269,17 +369,15 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   }, [position]);
 
   // Кнопка «показать меня»: при живом GPS — подлёт к точке, как в Яндекс
-  // такси. Живого GPS в MAX нет (вебвью не отдаёт геолокацию) — тогда
-  // кнопка становится постоянным входом в ручной выбор места
+  // такси. Живого GPS пока нет — пробуем его добыть вместе с диагностикой
   const recenter = () => {
     const map = mapRef.current;
     const marker = markerRef.current;
     if (!map) return;
-    if (!gpsRef.current) {
-      startPick();
+    if (!gpsRef.current || approx) {
+      onGeoPress();
       return;
     }
-    if (approx) startGeo();
     if (marker) {
       const c = marker.getLngLat();
       map.flyTo({
@@ -287,13 +385,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         zoom: Math.max(map.getZoom(), 13.8),
         duration: 700,
       });
-    } else if (navigator.geolocation) {
-      // точки ещё нет — запросим позицию, watchPosition покажет её сам
-      navigator.geolocation.getCurrentPosition(
-        () => {},
-        () => {},
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
     }
   };
 
@@ -309,11 +400,10 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       marginBottom: full ? 0 : 12,
     }}>
       <div ref={container} style={{ position: "absolute", inset: 0 }} />
-      {!pickMode && (
       <button
         type="button"
         onClick={recenter}
-        aria-label="Показать моё местоположение или указать место вручную"
+        aria-label="Показать моё местоположение"
         style={{
           position: "absolute", right: 14, bottom: 30,
           width: 42, height: 42, borderRadius: "50%",
@@ -329,7 +419,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           <path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3" />
         </svg>
       </button>
-      )}
       {/* Копирайт OSM (лицензия требует авторство): маленький значок ©
           в углу карты — по тапу раскрывается строка, мешает кнопкам нет */}
       <button
@@ -357,7 +446,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           userSelect: "none", WebkitUserSelect: "none",
         }}>{OSM_ATTRIBUTION}</div>
       )}
-      {geoBlocked && !pickMode && (
+      {geoBlocked && (
         <div style={{
           position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
           zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 8px 6px 13px",
@@ -370,18 +459,21 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           <span>Геопозиция запрещена — разрешите доступ в настройках телефона</span>
           <button
             type="button"
-            onClick={startPick}
+            onClick={onGeoPress}
+            disabled={geoPending || diagRun}
             style={{
-              border: 0, cursor: "pointer", borderRadius: 999,
+              border: 0, cursor: geoPending || diagRun ? "default" : "pointer",
+              borderRadius: 999,
               padding: "5px 11px", fontSize: 11, fontWeight: 800,
-              background: "#8a6d00", color: "#fff", fontFamily: "inherit",
+              background: geoPending || diagRun ? "#c7a54a" : "#8a6d00",
+              color: "#fff", fontFamily: "inherit",
             }}
-          >Указать место вручную</button>
+          >{diagRun ? "Проверяю…" : geoPending ? "Ищу…" : "Повторить"}</button>
         </div>
       )}
       {/* Точка по IP-адресу провайдера — честно помечаем как примерную
           (провайдер часто определяется по центру региона, а не по городу) */}
-      {approx && !geoBlocked && !pickMode && (
+      {approx && !geoBlocked && (
         <div style={{
           position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
           zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 8px 6px 13px",
@@ -394,28 +486,20 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           <span>Примерное место{approxCity ? `: ${approxCity}` : ""} (по IP)</span>
           <button
             type="button"
-            onClick={startGeo}
-            disabled={geoPending}
+            onClick={onGeoPress}
+            disabled={geoPending || diagRun}
             style={{
-              border: 0, cursor: geoPending ? "default" : "pointer", borderRadius: 999,
+              border: 0, cursor: geoPending || diagRun ? "default" : "pointer",
+              borderRadius: 999,
               padding: "5px 11px", fontSize: 11, fontWeight: 800,
-              background: geoPending ? "#98a2b3" : "#2f7bff", color: "#fff",
-              fontFamily: "inherit",
+              background: geoPending || diagRun ? "#98a2b3" : "#2f7bff",
+              color: "#fff", fontFamily: "inherit",
             }}
-          >{geoPending ? "Ищу…" : "Определить точно"}</button>
-          <button
-            type="button"
-            onClick={startPick}
-            style={{
-              border: 0, cursor: "pointer", borderRadius: 999,
-              padding: "5px 11px", fontSize: 11, fontWeight: 800,
-              background: "#3a4048", color: "#fff", fontFamily: "inherit",
-            }}
-          >Указать место</button>
+          >{diagRun ? "Проверяю…" : geoPending ? "Ищу…" : "Определить точно"}</button>
         </div>
       )}
       {/* Ни GPS (в MAX он не работает), ни IP не ответили */}
-      {noPos && !approx && !geoBlocked && !pickMode && (
+      {noPos && !approx && !geoBlocked && (
         <div style={{
           position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
           zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 8px 6px 13px",
@@ -428,60 +512,40 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           <span>Не удалось определить место</span>
           <button
             type="button"
-            onClick={startPick}
+            onClick={onGeoPress}
+            disabled={geoPending || diagRun}
             style={{
-              border: 0, cursor: "pointer", borderRadius: 999,
+              border: 0, cursor: geoPending || diagRun ? "default" : "pointer",
+              borderRadius: 999,
               padding: "5px 11px", fontSize: 11, fontWeight: 800,
-              background: "#2f7bff", color: "#fff", fontFamily: "inherit",
+              background: geoPending || diagRun ? "#98a2b3" : "#2f7bff",
+              color: "#fff", fontFamily: "inherit",
             }}
-          >Указать вручную</button>
+          >{diagRun ? "Проверяю…" : geoPending ? "Ищу…" : "Определить снова"}</button>
         </div>
       )}
-      {/* Режим выбора места: карта тащится под неподвижный прицел */}
-      {pickMode && (
-        <>
-          <div style={{
-            position: "absolute", left: "50%", top: "50%",
-            transform: "translate(-50%, -50%)", zIndex: 5, pointerEvents: "none",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 5,
-          }}>
-            <div style={{
-              width: 22, height: 22, borderRadius: "50%",
-              border: "3px solid #2f7bff", background: "rgba(255,255,255,.85)",
-              boxShadow: "0 2px 10px rgba(0,0,0,.35)",
-            }} />
-            <div style={{
-              fontSize: 10.5, fontWeight: 850, color: "#2f7bff",
-              background: "rgba(255,255,255,.92)", borderRadius: 6,
-              padding: "2px 7px", boxShadow: "0 2px 8px rgba(0,0,0,.25)",
-            }}>я здесь</div>
-          </div>
-          <div style={{
-            position: "absolute", left: "50%", transform: "translateX(-50%)",
-            bottom: 18, zIndex: 6, display: "flex", gap: 8,
-            background: "rgba(255,255,255,.95)", borderRadius: 16, padding: 8,
-            boxShadow: "0 8px 20px rgba(0,0,0,.25)", maxWidth: "calc(100% - 24px)",
-          }}>
-            <button
-              type="button"
-              onClick={savePick}
-              style={{
-                border: 0, cursor: "pointer", borderRadius: 999,
-                padding: "11px 18px", fontSize: 13, fontWeight: 850,
-                background: "#2f7bff", color: "#fff", fontFamily: "inherit",
-              }}
-            >Сохранить это место</button>
-            <button
-              type="button"
-              onClick={() => setPickMode(false)}
-              style={{
-                border: 0, cursor: "pointer", borderRadius: 999,
-                padding: "11px 16px", fontSize: 13, fontWeight: 750,
-                background: "#e8ebf0", color: "#3a4048", fontFamily: "inherit",
-              }}
-            >Отмена</button>
-          </div>
-        </>
+      {/* Итог диагностики GPS: короткая строка под верхним баннером */}
+      {diagText && !geoBlocked && !approx && (
+        <div style={{
+          position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
+          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 12px",
+          borderRadius: 999, background: "rgba(30,34,40,.88)", color: "#fff",
+          fontSize: 10.5, fontWeight: 700, lineHeight: 1.35, textAlign: "center",
+          boxShadow: "0 6px 16px rgba(0,0,0,.25)",
+        }}>
+          Диагностика: {diagText}
+        </div>
+      )}
+      {diagText && (geoBlocked || approx) && (
+        <div style={{
+          position: "absolute", top: 62, left: "50%", transform: "translateX(-50%)",
+          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "5px 12px",
+          borderRadius: 999, background: "rgba(30,34,40,.88)", color: "#fff",
+          fontSize: 10.5, fontWeight: 700, lineHeight: 1.35, textAlign: "center",
+          boxShadow: "0 6px 16px rgba(0,0,0,.25)",
+        }}>
+          Диагностика: {diagText}
+        </div>
       )}
       <style>{`
         @keyframes proDotPulse {
