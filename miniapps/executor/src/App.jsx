@@ -2337,9 +2337,10 @@ export default function App() {
   // Своя геопозиция с главной — держим профиль свежим, чтобы карта
   // в следующий раз открывалась на реальной точке, а не на устаревшей
   const sentPosAtRef = useRef(0);
-  const sendHomePos = (lat, lon) => {
+  const sendHomePos = (lat, lon, force) => {
     const now = Date.now();
-    if (!me || now - sentPosAtRef.current < 120000) return;
+    // force — ручное «указать место» с карты: без троттлинга, сразу на сервер
+    if (!me || (!force && now - sentPosAtRef.current < 120000)) return;
     sentPosAtRef.current = now;
     api(`/executors/${me.id}/position`, {
       method: "POST",

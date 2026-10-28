@@ -14,9 +14,11 @@ installPmtilesProtocol();
 
 // Примерные координаты по IP провайдера доступа — запасной источник,
 // когда GPS молчит (нет разрешения, спутники не ловятся): город-уровень,
-// на карте показывается большим ореолом «где-то здесь».
+// на карте показывается большим ореолом «где-то здесь». Для мобильного
+// интернета провайдер часто определяется по центру региона — поэтому
+// возвращаем и название города, чтобы честно показать «примерно где».
 async function ipHint() {
-  for (const url of ["https://ipwho.is/", "https://ipapi.co/json/"]) {
+  for (const url of ["https://ipwho.is/", "https://ipapi.co/json/", "https://ipinfo.io/json"]) {
     try {
       const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
       const to = ctrl ? setTimeout(() => ctrl.abort(), 4500) : null;
@@ -25,10 +27,16 @@ async function ipHint() {
       if (!r.ok) continue;
       const j = await r.json();
       if (!j || j.success === false) continue;
-      const lat = Number(j.latitude ?? j.lat);
-      const lon = Number(j.longitude ?? j.lon);
+      let lat = Number(j.latitude ?? j.lat);
+      let lon = Number(j.longitude ?? j.lon);
+      if ((!Number.isFinite(lat) || !Number.isFinite(lon)) && typeof j.loc === "string") {
+        // ipinfo.io: "loc": "45.035,38.975"
+        const parts = j.loc.split(",");
+        lat = Number(parts[0]);
+        lon = Number(parts[1]);
+      }
       if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-        return { lat, lon };
+        return { lat, lon, city: j.city || j.region || null };
       }
     } catch (e) {
       // источник недоступен — пробуем следующий
@@ -56,6 +64,10 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const [geoBlocked, setGeoBlocked] = useState(false); // геолокация запрещена
   const [attrOpen, setAttrOpen] = useState(false);     // раскрытая строка © OSM
   const [approx, setApprox] = useState(false);         // точка примерная (по IP)
+  const [approxCity, setApproxCity] = useState("");    // город из IP-сервиса
+  const [geoPending, setGeoPending] = useState(false); // ждём GPS-fix после запроса
+  const [pickMode, setPickMode] = useState(false);     // режим «укажите место вручную»
+  const [noPos, setNoPos] = useState(false);           // ни GPS, ни IP не ответили
 
   // Высота с учётом safe-area (iPhone): низ карты не заезжает под навбар
   const height = full
@@ -104,6 +116,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const startGeo = () => {
     const map = mapRef.current;
     if (!map || watchIdRef.current != null || !navigator.geolocation) return;
+    setGeoPending(true);
     watchIdRef.current = navigator.geolocation.watchPosition(
       pos => {
         const lon = pos.coords.longitude;
@@ -111,6 +124,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         ensureMarker(lon, lat, pos.coords.accuracy);
         setGeoBlocked(false);
         setApprox(false);
+        setApproxCity("");
+        setGeoPending(false);
         try { markerRef.current?.getElement()?.classList.remove("pro-home-approx"); } catch (e) {}
         if (!gpsRef.current) {
           gpsRef.current = true;
@@ -123,11 +138,41 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         }
       },
       err => {
+        setGeoPending(false);
         // code 1 — пользователь запретил доступ к геолокации
         if (err && err.code === 1) setGeoBlocked(true);
       },
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
+  };
+
+  // Ручное указание места: GPS в вебвью MAX не работает (в SDK нет моста
+  // к системной геолокации), поэтому исполнитель сам ставит точку —
+  // тащит карту под неподвижный прицел и жмёт «Сохранить»
+  const startPick = () => {
+    setPickMode(true);
+    const map = mapRef.current;
+    if (map) {
+      map.flyTo({ center: map.getCenter(), zoom: Math.max(map.getZoom(), 13.5), duration: 500 });
+    }
+  };
+
+  const savePick = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const c = map.getCenter();
+    setPickMode(false);
+    ensureMarker(c.lng, c.lat, 30);
+    setApprox(false);
+    setApproxCity("");
+    setNoPos(false);
+    setGeoBlocked(false);
+    try { markerRef.current?.getElement()?.classList.remove("pro-home-approx"); } catch (e) {}
+    // Третий аргумент force — ручное сохранение не ждёт троттлинг
+    if (onPosition) {
+      sentRef.current = Date.now();
+      onPosition(c.lat, c.lng, true);
+    }
   };
 
   useEffect(() => {
@@ -181,9 +226,15 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       hintTimer = setTimeout(async () => {
         if (gpsRef.current || markerRef.current) return;
         const hint = await ipHint();
-        if (!hint || gpsRef.current || markerRef.current || !mapRef.current) return;
+        if (!hint) {
+          // и GPS, и IP молчат — остаётся ручной способ
+          setNoPos(true);
+          return;
+        }
+        if (gpsRef.current || markerRef.current || !mapRef.current) return;
         ensureMarker(hint.lon, hint.lat, 3500);
         setApprox(true);
+        setApproxCity(hint.city || "");
         try { markerRef.current?.getElement()?.classList.add("pro-home-approx"); } catch (e) {}
         mapRef.current.flyTo({ center: [hint.lon, hint.lat], zoom: 10.8, duration: 900 });
       }, 7000);
@@ -217,12 +268,17 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     });
   }, [position]);
 
-  // Кнопка «показать меня» — подлёт к точке, как в Яндекс такси
+  // Кнопка «показать меня»: при живом GPS — подлёт к точке, как в Яндекс
+  // такси. Живого GPS в MAX нет (вебвью не отдаёт геолокацию) — тогда
+  // кнопка становится постоянным входом в ручной выбор места
   const recenter = () => {
     const map = mapRef.current;
     const marker = markerRef.current;
     if (!map) return;
-    // Точка примерная (по IP) — жест «показать меня» просит точный GPS
+    if (!gpsRef.current) {
+      startPick();
+      return;
+    }
     if (approx) startGeo();
     if (marker) {
       const c = marker.getLngLat();
@@ -253,10 +309,11 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       marginBottom: full ? 0 : 12,
     }}>
       <div ref={container} style={{ position: "absolute", inset: 0 }} />
+      {!pickMode && (
       <button
         type="button"
         onClick={recenter}
-        aria-label="Показать моё местоположение"
+        aria-label="Показать моё местоположение или указать место вручную"
         style={{
           position: "absolute", right: 14, bottom: 30,
           width: 42, height: 42, borderRadius: "50%",
@@ -272,6 +329,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           <path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3" />
         </svg>
       </button>
+      )}
       {/* Копирайт OSM (лицензия требует авторство): маленький значок ©
           в углу карты — по тапу раскрывается строка, мешает кнопкам нет */}
       <button
@@ -299,39 +357,131 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           userSelect: "none", WebkitUserSelect: "none",
         }}>{OSM_ATTRIBUTION}</div>
       )}
-      {geoBlocked && (
+      {geoBlocked && !pickMode && (
         <div style={{
           position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
-          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "7px 13px",
-          borderRadius: 999, background: "rgba(255,214,102,.95)", color: "#5b4200",
-          fontSize: 11, fontWeight: 750, textAlign: "center", lineHeight: 1.35,
+          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 8px 6px 13px",
+          borderRadius: 16, background: "rgba(255,214,102,.95)", color: "#5b4200",
+          fontSize: 11, fontWeight: 750, lineHeight: 1.35,
           boxShadow: "0 6px 16px rgba(0,0,0,.22)",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          justifyContent: "center", textAlign: "center",
         }}>
-          Геопозиция запрещена — разрешите доступ в настройках телефона
+          <span>Геопозиция запрещена — разрешите доступ в настройках телефона</span>
+          <button
+            type="button"
+            onClick={startPick}
+            style={{
+              border: 0, cursor: "pointer", borderRadius: 999,
+              padding: "5px 11px", fontSize: 11, fontWeight: 800,
+              background: "#8a6d00", color: "#fff", fontFamily: "inherit",
+            }}
+          >Указать место вручную</button>
         </div>
       )}
       {/* Точка по IP-адресу провайдера — честно помечаем как примерную
           (провайдер часто определяется по центру региона, а не по городу) */}
-      {approx && !geoBlocked && (
+      {approx && !geoBlocked && !pickMode && (
         <div style={{
           position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
           zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 8px 6px 13px",
-          borderRadius: 999, background: "rgba(255,255,255,.94)", color: "#3a4048",
-          fontSize: 11, fontWeight: 750, textAlign: "center", lineHeight: 1.35,
+          borderRadius: 16, background: "rgba(255,255,255,.94)", color: "#3a4048",
+          fontSize: 11, fontWeight: 750, lineHeight: 1.35,
           boxShadow: "0 6px 16px rgba(0,0,0,.22)",
-          display: "flex", alignItems: "center", gap: 9, whiteSpace: "nowrap",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          justifyContent: "center", textAlign: "center",
         }}>
-          Примерное место (по IP)
+          <span>Примерное место{approxCity ? `: ${approxCity}` : ""} (по IP)</span>
           <button
             type="button"
             onClick={startGeo}
+            disabled={geoPending}
+            style={{
+              border: 0, cursor: geoPending ? "default" : "pointer", borderRadius: 999,
+              padding: "5px 11px", fontSize: 11, fontWeight: 800,
+              background: geoPending ? "#98a2b3" : "#2f7bff", color: "#fff",
+              fontFamily: "inherit",
+            }}
+          >{geoPending ? "Ищу…" : "Определить точно"}</button>
+          <button
+            type="button"
+            onClick={startPick}
+            style={{
+              border: 0, cursor: "pointer", borderRadius: 999,
+              padding: "5px 11px", fontSize: 11, fontWeight: 800,
+              background: "#3a4048", color: "#fff", fontFamily: "inherit",
+            }}
+          >Указать место</button>
+        </div>
+      )}
+      {/* Ни GPS (в MAX он не работает), ни IP не ответили */}
+      {noPos && !approx && !geoBlocked && !pickMode && (
+        <div style={{
+          position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
+          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 8px 6px 13px",
+          borderRadius: 16, background: "rgba(255,255,255,.94)", color: "#3a4048",
+          fontSize: 11, fontWeight: 750, lineHeight: 1.35,
+          boxShadow: "0 6px 16px rgba(0,0,0,.22)",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          justifyContent: "center", textAlign: "center",
+        }}>
+          <span>Не удалось определить место</span>
+          <button
+            type="button"
+            onClick={startPick}
             style={{
               border: 0, cursor: "pointer", borderRadius: 999,
               padding: "5px 11px", fontSize: 11, fontWeight: 800,
               background: "#2f7bff", color: "#fff", fontFamily: "inherit",
             }}
-          >Определить точно</button>
+          >Указать вручную</button>
         </div>
+      )}
+      {/* Режим выбора места: карта тащится под неподвижный прицел */}
+      {pickMode && (
+        <>
+          <div style={{
+            position: "absolute", left: "50%", top: "50%",
+            transform: "translate(-50%, -50%)", zIndex: 5, pointerEvents: "none",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 5,
+          }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: "50%",
+              border: "3px solid #2f7bff", background: "rgba(255,255,255,.85)",
+              boxShadow: "0 2px 10px rgba(0,0,0,.35)",
+            }} />
+            <div style={{
+              fontSize: 10.5, fontWeight: 850, color: "#2f7bff",
+              background: "rgba(255,255,255,.92)", borderRadius: 6,
+              padding: "2px 7px", boxShadow: "0 2px 8px rgba(0,0,0,.25)",
+            }}>я здесь</div>
+          </div>
+          <div style={{
+            position: "absolute", left: "50%", transform: "translateX(-50%)",
+            bottom: 18, zIndex: 6, display: "flex", gap: 8,
+            background: "rgba(255,255,255,.95)", borderRadius: 16, padding: 8,
+            boxShadow: "0 8px 20px rgba(0,0,0,.25)", maxWidth: "calc(100% - 24px)",
+          }}>
+            <button
+              type="button"
+              onClick={savePick}
+              style={{
+                border: 0, cursor: "pointer", borderRadius: 999,
+                padding: "11px 18px", fontSize: 13, fontWeight: 850,
+                background: "#2f7bff", color: "#fff", fontFamily: "inherit",
+              }}
+            >Сохранить это место</button>
+            <button
+              type="button"
+              onClick={() => setPickMode(false)}
+              style={{
+                border: 0, cursor: "pointer", borderRadius: 999,
+                padding: "11px 16px", fontSize: 13, fontWeight: 750,
+                background: "#e8ebf0", color: "#3a4048", fontFamily: "inherit",
+              }}
+            >Отмена</button>
+          </div>
+        </>
       )}
       <style>{`
         @keyframes proDotPulse {
