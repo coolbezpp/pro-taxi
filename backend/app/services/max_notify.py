@@ -29,7 +29,12 @@ except Exception:  # pragma: no cover
 _SSL_CTX = _BASE_CTX
 
 
-def send_max_message(max_id: str, text: str, bot: str = "client"):
+def send_max_message(max_id: str, text: str, bot: str = "client", keyboard: list | None = None):
+    """Отправка сообщения ботом MAX.
+
+    keyboard — двумерный массив кнопок inline-клавиатуры (например,
+    [{"type": "request_geo_location", "text": "Поделиться геопозицией"}]).
+    """
     tokens = {
         "client": settings.max_client_bot_token,
         "executor": settings.max_executor_bot_token
@@ -41,7 +46,10 @@ def send_max_message(max_id: str, text: str, bot: str = "client"):
         return {"sent": False, "reason": f"Токен бота {bot} не настроен"}
 
     url = f"https://platform-api2.max.ru/messages?chat_id={max_id}"
-    payload = json.dumps({"text": text}).encode("utf-8")
+    body: dict = {"text": text}
+    if keyboard:
+        body["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": keyboard}}]
+    payload = json.dumps(body).encode("utf-8")
 
     request = urllib.request.Request(
         url,

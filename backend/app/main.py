@@ -2832,3 +2832,16 @@ def map_proxy(
 # ORDER CHAIN ROUTER
 from .routers.order_chain import router as order_chain_router
 app.include_router(order_chain_router, prefix="/api")
+
+# Вебхук MAX: геопозиция исполнителя через чат бота (GPS в вебвью MAX
+# заблокирован самим приложением — см. routers/maxhook.py)
+from .routers.maxhook import router as maxhook_router, subscribe_webhooks
+app.include_router(maxhook_router)
+
+
+@app.on_event("startup")
+def _subscribe_max_webhooks():
+    """Подписки вебхуков MAX сбрасываются при перезапуске бота —
+    пересоздаём на каждом старте api (в фоне, старт не ждёт MAX)."""
+    import asyncio
+    asyncio.get_event_loop().run_in_executor(None, subscribe_webhooks)

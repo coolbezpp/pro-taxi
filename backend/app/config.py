@@ -4,6 +4,10 @@ class Settings(BaseSettings):
     jwt_secret: str = "change_me"
     max_client_bot_token: str = ""
     max_executor_bot_token: str = ""
+    # Секрет вебхука MAX: шлётся в подписке (POST /subscriptions) и
+    # проверяется по заголовку X-Max-Bot-Api-Secret. Если пуст — берётся
+    # jwt_secret (надёжнее, чем открытый вебхук)
+    max_webhook_secret: str = ""
     commission_percent: float = 15.0
     # Телефоны (через запятую), которым разрешено брать свои же заказы
     self_order_exempt: str = ""

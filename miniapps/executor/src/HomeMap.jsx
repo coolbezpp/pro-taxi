@@ -19,7 +19,7 @@ const KKR_CENTER = [38.975, 45.035];
 // (PMTiles Краснодарского края), синяя точка «я здесь» с ореолом точности
 // и кнопка «показать меня». Свежий GPS всегда приоритетнее позиции из
 // профиля — устаревшая серверная точка не «привязывает» карту.
-export default function HomeMap({ t, position = null, full = false, onPosition = null }) {
+export default function HomeMap({ t, position = null, full = false, onPosition = null, onRequestGeo = null }) {
   const container = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -300,15 +300,34 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Позиция из профиля догрузилась позже карты — ставим точку-подсказку
+  // Позиция из профиля догрузилась позже карты — ставим точку-подсказку.
+  // Если точка ОБНОВИЛАСЬ (пришла от бота через вебхук) и живого GPS нет —
+  // передвигаем маркер: исполнитель вернулся из чата в миниапп и видит
+  // свою свежую точку. Сравниваем координаты, а не объект: position
+  // пересоздаётся на каждый рендер профиля
   useEffect(() => {
-    if (!position || gpsRef.current || markerRef.current) return;
-    ensureMarker(position.lon, position.lat, null);
-    mapRef.current?.flyTo({
-      center: [position.lon, position.lat],
-      zoom: 13.4,
-      duration: 700,
-    });
+    if (!position || gpsRef.current) return;
+    const m = markerRef.current;
+    if (!m) {
+      ensureMarker(position.lon, position.lat, null);
+      mapRef.current?.flyTo({
+        center: [position.lon, position.lat],
+        zoom: 13.4,
+        duration: 700,
+      });
+      setNoPos(false);
+      return;
+    }
+    const cur = m.getLngLat();
+    if (Math.abs(cur.lat - position.lat) > 1e-5 || Math.abs(cur.lng - position.lon) > 1e-5) {
+      ensureMarker(position.lon, position.lat, null);
+      setNoPos(false);
+      mapRef.current?.flyTo({
+        center: [position.lon, position.lat],
+        zoom: 13.4,
+        duration: 700,
+      });
+    }
   }, [position]);
 
   // Кнопка «показать меня»: при живом GPS — подлёт к точке, как в Яндекс
@@ -399,7 +418,18 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
           justifyContent: "center", textAlign: "center",
         }}>
-          <span>Геопозиция запрещена — разрешите доступ в настройках телефона</span>
+          <span>MAX не даёт доступ к геолокации в приложении</span>
+          {onRequestGeo && (
+            <button
+              type="button"
+              onClick={onRequestGeo}
+              style={{
+                border: 0, cursor: "pointer", borderRadius: 999,
+                padding: "5px 11px", fontSize: 11, fontWeight: 800,
+                background: "#2f7bff", color: "#fff", fontFamily: "inherit",
+              }}
+            >Поделиться в чате</button>
+          )}
           <button
             type="button"
             onClick={onGeoPress}
@@ -426,6 +456,17 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           justifyContent: "center", textAlign: "center",
         }}>
           <span>Не удалось определить место</span>
+          {onRequestGeo && (
+            <button
+              type="button"
+              onClick={onRequestGeo}
+              style={{
+                border: 0, cursor: "pointer", borderRadius: 999,
+                padding: "5px 11px", fontSize: 11, fontWeight: 800,
+                background: "#2f7bff", color: "#fff", fontFamily: "inherit",
+              }}
+            >Поделиться в чате</button>
+          )}
           <button
             type="button"
             onClick={onGeoPress}

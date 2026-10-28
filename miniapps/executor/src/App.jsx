@@ -2348,6 +2348,30 @@ export default function App() {
     }).catch(() => {});
   };
 
+  // Гео через бота: GPS в вебвью MAX заблокирован самим приложением, а
+  // «поделиться геопозицией» в чате бота работает. Боту уходит запрос —
+  // он отправит кнопку, исполнитель жмёт «Поделиться» и возвращается:
+  // миниапп не перезагружается, а refreshMe (каждые 15 сек + focus)
+  // подхватывает новую точку из профиля
+  const requestGeoBot = async () => {
+    try {
+      await api("/max/geo-request", { method: "POST" });
+    } catch (e) {
+      // бот не настроен / сессия — открываем чат всё равно: можно
+      // поделиться геопозицией обычной скрепкой
+    }
+    try {
+      const wb = window.Max?.WebApp || window.Max || window.WebApp || window.Telegram?.WebApp;
+      if (wb?.openMaxLink) {
+        wb.openMaxLink("https://max.ru/se14320724_1_bot");
+      } else {
+        window.open("https://max.ru/se14320724_1_bot", "_blank");
+      }
+    } catch (e) {
+      // открытие чата не удалось — не критично
+    }
+  };
+
   // Геопозиция для слежения за исполнителем: пока есть активный заказ
   useEffect(() => {
     const active = myOrders.find(o => ["assigned", "accepted", "in_progress"].includes(o.status));
@@ -2396,6 +2420,21 @@ export default function App() {
       return () => clearInterval(it);
     }
   }, [me && me.id, page]);
+
+  // Возврат из чата бота (гео исполнителя): миниапп не перезагружается —
+  // подхватываем свежую точку из профиля сразу, как только он снова виден
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) refreshMe();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me && me.id]);
 
   async function accept(order) {
     clearInterval(timerRef.current);
@@ -2658,6 +2697,7 @@ export default function App() {
                       : null
                   }
                   onPosition={sendHomePos}
+                  onRequestGeo={requestGeoBot}
                 />
               </React.Suspense>
             </>
