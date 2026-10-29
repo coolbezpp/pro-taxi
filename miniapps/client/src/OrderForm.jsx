@@ -43,7 +43,8 @@ export default function OrderForm({
     );
   }, []);
 
-  // Подсказки по введённому тексту
+  // Подсказки по введённому тексту: текущий город уточняет запрос и
+  // поднимает «свои» адреса наверх (геокодер ищет по всей стране)
   useEffect(() => {
     const text = query.trim();
     if (text.length < 3) {
@@ -54,13 +55,23 @@ export default function OrderForm({
     setSearching(true);
     const timer = setTimeout(async () => {
       try {
-        const params = new URLSearchParams({ q: text });
+        const cityTrim = (city || "").trim();
+        const params = new URLSearchParams({
+          q: cityTrim ? `${cityTrim}, ${text}` : text,
+        });
         if (myPos) {
           params.set("lat", String(myPos.lat));
           params.set("lon", String(myPos.lon));
         }
         const res = await api(`/geo/search?${params.toString()}`);
-        if (reqId.current === id) setSuggestions(Array.isArray(res) ? res : []);
+        const rows = Array.isArray(res) ? res : [];
+        const cityLower = cityTrim.toLowerCase();
+        rows.sort((a, b) => {
+          const aCity = cityLower && a.title?.toLowerCase().includes(cityLower) ? 0 : 1;
+          const bCity = cityLower && b.title?.toLowerCase().includes(cityLower) ? 0 : 1;
+          return aCity - bCity;
+        });
+        if (reqId.current === id) setSuggestions(rows);
       } catch (e) {
         if (reqId.current === id) setSuggestions([]);
       } finally {
@@ -68,7 +79,7 @@ export default function OrderForm({
       }
     }, 320);
     return () => clearTimeout(timer);
-  }, [query, myPos]);
+  }, [query, myPos, city]);
 
   // Пересчёт маршрута и цены, когда изменились адреса или опции
   useEffect(() => {

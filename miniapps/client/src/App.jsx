@@ -403,6 +403,30 @@ export default function App() {
       .catch(() => setEvents([]));
   }, []);
 
+  // Город по геопозиции при входе: подсказки адресов в заказе идут сначала
+  // из него. В вебвью MAX GPS часто закрыт (доказано на Android) — тогда
+  // остаётся сохранённый/выбранный вручную город (Профиль → Город).
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        try {
+          const res = await api(
+            `/geo/city?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`
+          );
+          if (res?.city) {
+            setCity(res.city);
+            localStorage.setItem("pro_city", res.city);
+          }
+        } catch (e) {
+          // геокодер недоступен — оставляем прежний город
+        }
+      },
+      () => {},
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 }
+    );
+  }, []);
+
   // Заказы клиента с сервера: список и текущий заказ должны переживать
   // перезапуск миниаппа. Если заказ активен — сразу открываем окно слежения.
   async function loadMyOrders() {

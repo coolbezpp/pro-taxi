@@ -6,8 +6,13 @@ import os
 import time
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func as sa_func
+from sqlalchemy.orm import Session
+
+from .. import models
+from ..db import get_db
 
 router = APIRouter(prefix="/api/geo", tags=["geo"])
 
@@ -217,6 +222,58 @@ async def search_places(q: str, lat: float | None = None, lon: float | None = No
                 return results
 
     raise HTTPException(503, "Поиск адресов временно недоступен")
+
+
+@router.get("/city")
+def detect_city(lat: float, lon: float, db: Session = Depends(get_db)):
+    """Город по координатам — опора подсказок адресов «свой город первым».
+
+    Сначала свои городские зоны (tariff_city_zones, PostGIS ST_Contains):
+    мгновенно и без внешних сервисов. Если точки нет в зонах — обратный
+    геокодинг Nominatim. Вебвью MAX GPS часто закрыт: без координат миниапп
+    сюда не ходит и оставляет сохранённый/выбранный вручную город.
+    """
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(400, "Некорректные координаты")
+
+    try:
+        zone = (
+            db.query(models.TariffCityZone)
+            .filter(
+                models.TariffCityZone.deleted_at.is_(None),
+                sa_func.ST_Contains(
+                    models.TariffCityZone.geometry,
+                    sa_func.ST_SetSRID(sa_func.ST_MakePoint(lon, lat), 4326),
+                ),
+            )
+            .first()
+        )
+        if zone and zone.city:
+            return {"city": zone.city, "source": "zone"}
+    except Exception:
+        logging.getLogger("pro.geo").exception("geo/city: зоны не проверились")
+
+    try:
+        with httpx.Client(timeout=8.0, headers={"User-Agent": "PRO-Taxi/1.0"}) as client:
+            # zoom=10 — крупный масштаб: часто возвращает только округ без
+            # населённого пункта; zoom=14 доходит до города/посёлка
+            for zoom in (10, 14):
+                response = client.get(
+                    f"{NOMINATIM_URL}/reverse",
+                    params={
+                        "lat": lat, "lon": lon,
+                        "format": "jsonv2", "zoom": zoom, "accept-language": "ru",
+                    },
+                )
+                response.raise_for_status()
+                address = (response.json() or {}).get("address") or {}
+                for key in ("city", "town", "municipality", "village"):
+                    if address.get(key):
+                        return {"city": address[key], "source": "nominatim"}
+    except Exception:
+        pass
+
+    return {"city": None, "source": None}
 
 
 _log = logging.getLogger("pro.geo.diag")
