@@ -465,5 +465,24 @@ class FraudReview(Base):
     updated_at = Column(DateTime, server_default=func.now())
 
 
+class TrackingCode(Base):
+    """Одноразовый код входа для страницы GPS-трекинга (/executor/track.html).
+
+    GPS в вебвью MAX заблокирован самим приложением — водитель берёт код
+    в миниаппе и вводит его в системном браузере, где navigator.geolocation
+    работает штатно. Хранится только sha256-хэш кода; живёт 10 минут,
+    применяется один раз (used_at).
+    """
+
+    __tablename__ = "tracking_codes"
+
+    id = Column(Integer, primary_key=True)
+    executor_id = Column(Integer, ForeignKey("executors.id"), nullable=False, index=True)
+    code_hash = Column(String, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 
 

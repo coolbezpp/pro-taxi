@@ -19,7 +19,7 @@ const KKR_CENTER = [38.975, 45.035];
 // (PMTiles Краснодарского края), синяя точка «я здесь» с ореолом точности
 // и кнопка «показать меня». Свежий GPS всегда приоритетнее позиции из
 // профиля — устаревшая серверная точка не «привязывает» карту.
-export default function HomeMap({ t, position = null, full = false, onPosition = null, onRequestGeo = null }) {
+export default function HomeMap({ t, position = null, full = false, onPosition = null, onRequestGeo = null, onEnableTrack = null, trackBusy = false }) {
   const container = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -419,6 +419,18 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           justifyContent: "center", textAlign: "center",
         }}>
           <span>MAX не даёт доступ к геолокации в приложении</span>
+          {onEnableTrack && (
+            <button
+              type="button"
+              onClick={onEnableTrack}
+              disabled={trackBusy}
+              style={{
+                border: 0, cursor: trackBusy ? "default" : "pointer", borderRadius: 999,
+                padding: "5px 11px", fontSize: 11, fontWeight: 800,
+                background: "#177e46", color: "#fff", fontFamily: "inherit",
+              }}
+            >{trackBusy ? "Готовлю код…" : "Включить GPS"}</button>
+          )}
           {onRequestGeo && (
             <button
               type="button"
@@ -456,6 +468,18 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           justifyContent: "center", textAlign: "center",
         }}>
           <span>Не удалось определить место</span>
+          {onEnableTrack && (
+            <button
+              type="button"
+              onClick={onEnableTrack}
+              disabled={trackBusy}
+              style={{
+                border: 0, cursor: trackBusy ? "default" : "pointer", borderRadius: 999,
+                padding: "5px 11px", fontSize: 11, fontWeight: 800,
+                background: "#177e46", color: "#fff", fontFamily: "inherit",
+              }}
+            >{trackBusy ? "Готовлю код…" : "Включить GPS"}</button>
+          )}
           {onRequestGeo && (
             <button
               type="button"

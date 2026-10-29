@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#17181c">
+<title>GPS-трекинг — «Про»</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #17181c; color: #f2f2f7;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .card { width: 100%; max-width: 420px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #98989e; font-size: 13px; line-height: 1.45; margin: 0 0 18px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 700;
+    background: #26272d; color: #c9c9cf; margin-bottom: 16px;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #6b6b72; }
+  .dot.live { background: #30d158; animation: pulse 1.6s infinite; }
+  .dot.wait { background: #ffd60a; animation: pulse 1.6s infinite; }
+  .dot.err { background: #ff453a; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 currentColor; opacity:1;} 70%{opacity:.6;} 100%{opacity:1;} }
+  .row {
+    display: flex; justify-content: space-between; gap: 10px;
+    background: #212228; border-radius: 14px; padding: 13px 15px; margin-bottom: 8px;
+    font-size: 14px;
+  }
+  .row b { font-variant-numeric: tabular-nums; }
+  .row span { color: #98989e; }
+  input {
+    width: 100%; padding: 15px; font-size: 22px; font-weight: 800; text-align: center;
+    letter-spacing: 6px; border-radius: 14px; border: 1px solid #3a3a41;
+    background: #212228; color: #f2f2f7; text-transform: uppercase;
+  }
+  input:focus { outline: 2px solid #2f7bff; border-color: transparent; }
+  button {
+    width: 100%; border: 0; border-radius: 14px; padding: 15px; margin-top: 10px;
+    font-size: 16px; font-weight: 800; font-family: inherit; cursor: pointer;
+    background: #2f7bff; color: #fff;
+  }
+  button:disabled { opacity: .5; }
+  button.stop { background: #3a3a41; }
+  .hint { color: #98989e; font-size: 12.5px; line-height: 1.5; margin-top: 14px; }
+  .hint b { color: #f2f2f7; }
+  .err-text { color: #ff6961; font-size: 13px; margin-top: 10px; min-height: 18px; }
+  .hidden { display: none; }
+  .brand { color: #98989e; font-size: 12px; text-align: center; margin-top: 22px; }
+</style>
+</head>
+<body>
+<div class="card">
+
+  <!-- Форма входа по одноразовому коду -->
+  <div id="login">
+    <h1>GPS-трекинг</h1>
+    <p class="sub">
+      Водительское приложение «Про».<br>
+      Включите слежение за вашим местоположением — координаты уходят на карту диспетчера.
+    </p>
+    <input id="code" inputmode="latin" autocomplete="one-time-code" placeholder="XXXX-XXXX" maxlength="9">
+    <div class="err-text" id="loginErr"></div>
+    <button id="loginBtn">Включить трекинг</button>
+    <p class="hint">
+      Код — <b>одноразовый</b>, живёт 10 минут. Его можно взять в приложении
+      исполнителя: главная → «Включить GPS».
+    </p>
+  </div>
+
+  <!-- Активный трекинг -->
+  <div id="track" class="hidden">
+    <h1 id="who">GPS-трекинг</h1>
+    <div class="pill"><div class="dot" id="dot"></div><span id="state">Запуск…</span></div>
+    <div class="row"><span>Координаты</span><b id="coords">—</b></div>
+    <div class="row"><span>Точность</span><b id="acc">—</b></div>
+    <div class="row"><span>Отправлено на сервер</span><b id="sent">—</b></div>
+    <div class="row"><span>Последний раз</span><b id="last">—</b></div>
+    <button class="stop" id="stopBtn">Остановить трекинг</button>
+    <p class="hint" id="trackHint">
+      Работает, пока страница открыта. Не закрывайте вкладку и не блокируйте
+      экран — диспетер видит вас в реальном времени.
+    </p>
+    <div class="err-text" id="trackErr"></div>
+  </div>
+
+  <p class="brand">Сервис «Про» · procityservice.ru</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var API = "/api";
+  var LS_TOKEN = "pro_track_token";
+  var LS_EXEC = "pro_track_exec";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var loginEl = $("login"), trackEl = $("track");
+  var codeInput = $("code"), loginBtn = $("loginBtn"), loginErr = $("loginErr");
+  var dot = $("dot"), stateEl = $("state"), coordsEl = $("coords"), accEl = $("acc");
+  var sentEl = $("sent"), lastEl = $("last"), stopBtn = $("stopBtn"), trackErr = $("trackErr");
+
+  var watchId = null, wakeLock = null;
+  var sentCount = 0, lastSendAt = 0, lastPos = null;
+
+  function token() { try { return localStorage.getItem(LS_TOKEN); } catch (e) { return null; } }
+  function execInfo() {
+    try { return JSON.parse(localStorage.getItem(LS_EXEC) || "{}"); } catch (e) { return {}; }
+  }
+  function fmtTime(d) {
+    return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+
+  function setState(kind, text) {
+    dot.className = "dot" + (kind ? " " + kind : "");
+    stateEl.textContent = text;
+  }
+
+  function showTrack() {
+    var info = execInfo();
+    $("who").textContent = info.name ? "GPS · " + info.name : "GPS-трекинг";
+    loginEl.classList.add("hidden");
+    trackEl.classList.remove("hidden");
+  }
+  function showLogin(msg) {
+    stopTracking(false);
+    try { localStorage.removeItem(LS_TOKEN); localStorage.removeItem(LS_EXEC); } catch (e) {}
+    trackEl.classList.add("hidden");
+    loginEl.classList.remove("hidden");
+    if (msg) loginErr.textContent = msg;
+  }
+
+  // --- вход по одноразовому коду -------------------------------------------
+  function login(code) {
+    loginErr.textContent = "";
+    loginBtn.disabled = true;
+    loginBtn.textContent = "Проверяю…";
+    fetch(API + "/track/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code })
+    }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, d: d }; });
+    }).then(function (res) {
+      if (!res.ok) throw new Error(res.d.detail || "Код не принят");
+      try {
+        localStorage.setItem(LS_TOKEN, res.d.token);
+        localStorage.setItem(LS_EXEC, JSON.stringify(res.d.executor || {}));
+      } catch (e) {}
+      startTracking();
+    }).catch(function (e) {
+      loginErr.textContent = e.message || "Не удалось войти";
+    }).then(function () {
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Включить трекинг";
+    });
+  }
+
+  loginBtn.addEventListener("click", function () {
+    var v = (codeInput.value || "").trim();
+    if (v.length < 6) { loginErr.textContent = "Введите код из приложения"; return; }
+    login(v);
+  });
+  codeInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") loginBtn.click();
+  });
+
+  // --- отправка позиции ------------------------------------------------------
+  function sendPosition(pos) {
+    var now = Date.now();
+    if (now - lastSendAt < 10000) return;   // не чаще раза в 10 секунд
+    lastSendAt = now;
+    var info = execInfo();
+    fetch(API + "/executors/" + info.id + "/position", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token() },
+      body: JSON.stringify({ lat: pos.coords.latitude, lon: pos.coords.longitude })
+    }).then(function (r) {
+      if (r.status === 401) {
+        showLogin("Сессия устарела — запросите новый код в приложении");
+        return;
+      }
+      if (!r.ok) throw new Error();
+      sentCount += 1;
+      sentEl.textContent = String(sentCount);
+      lastEl.textContent = fmtTime(new Date());
+      setState("live", "Трекинг включён");
+      trackErr.textContent = "";
+    }).catch(function () {
+      setState("wait", "Нет связи — повторю");
+    });
+  }
+
+  function onPos(pos) {
+    lastPos = pos;
+    coordsEl.textContent =
+      pos.coords.latitude.toFixed(5) + ", " + pos.coords.longitude.toFixed(5);
+    accEl.textContent = pos.coords.accuracy ? "±" + Math.round(pos.coords.accuracy) + " м" : "—";
+    if (!sentCount) setState("wait", "Отправляю первое место…");
+    sendPosition(pos);
+  }
+
+  function onGeoErr(err) {
+    if (err && err.code === 1) {
+      setState("err", "Геолокация запрещена");
+      trackErr.textContent =
+        "Разрешите доступ к геолокации: значок слева от адреса в браузере → «Разрешить».";
+    } else {
+      setState("wait", "Ищу спутники…");
+    }
+  }
+
+  // --- wake lock: экран не должен гаснуть во время смены ---------------------
+  function requestWakeLock() {
+    if (!("wakeLock" in navigator)) return;
+    navigator.wakeLock.request("screen").then(function (l) {
+      wakeLock = l;
+      l.addEventListener("release", function () { wakeLock = null; });
+    }).catch(function () {});
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && watchId !== null) {
+      requestWakeLock();
+      if (lastPos) sendPosition(lastPos);  // вернулись на вкладку — сразу точка
+    }
+  });
+
+  function startTracking() {
+    showTrack();
+    if (!navigator.geolocation) {
+      setState("err", "Геопозиция не поддерживается");
+      trackErr.textContent = "Браузер не поддерживает геолокацию. Попробуйте Chrome или Safari.";
+      return;
+    }
+    setState("wait", "Ищу спутники…");
+    requestWakeLock();
+    watchId = navigator.geolocation.watchPosition(onPos, onGeoErr, {
+      enableHighAccuracy: true, maximumAge: 3000, timeout: 30000
+    });
+  }
+
+  function stopTracking(forget) {
+    if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    if (wakeLock) { try { wakeLock.release(); } catch (e) {} wakeLock = null; }
+    if (forget) showLogin("");
+  }
+  stopBtn.addEventListener("click", function () { stopTracking(true); });
+
+  // --- старт: токен в localStorage или код в ссылке --------------------------
+  // Код приходит в хэше (#code=XXXX-XXXX), чтобы он не утекал в логи сервера
+  var m = /code=([A-Za-z0-9-]{6,20})/.exec(location.hash || "");
+  if (m) {
+    history.replaceState(null, "", location.pathname);
+    login(m[1].toUpperCase());
+  } else if (token() && execInfo().id) {
+    // Страницу открывали раньше — трекинг возобновляется сам
+    startTracking();
+  }
+})();
+</script>
+</body>
+</html>

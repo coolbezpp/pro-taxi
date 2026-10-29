@@ -2349,6 +2349,33 @@ export default function App() {
     }).catch(() => {});
   };
 
+  // GPS-трекинг через системный браузер телефона: в вебвью MAX GPS заблокирован
+  // самим приложением, а браузер отдаёт navigator.geolocation штатно.
+  // Миниапп выдаёт одноразовый код (живёт 10 минут) и открывает страницу
+  // /executor/track.html — она шлёт координаты на карту диспетчера
+  // каждые ~10 секунд, пока открыта.
+  const [trackCode, setTrackCode] = useState(null);
+  const [trackBusy, setTrackBusy] = useState(false);
+  const [trackErr, setTrackErr] = useState("");
+
+  const enableTrackBrowser = async () => {
+    setTrackBusy(true);
+    setTrackErr("");
+    try {
+      const res = await api("/executor/tracking-code", { method: "POST" });
+      setTrackCode(res);
+      try {
+        window.open(res.url + "#code=" + res.code, "_blank");
+      } catch (e) {
+        // вебвью запретила открытие — код остаётся в модалке, ссылка там же
+      }
+    } catch (e) {
+      setTrackErr("Не удалось получить код — попробуйте ещё раз");
+    } finally {
+      setTrackBusy(false);
+    }
+  };
+
   // Гео через бота: GPS в вебвью MAX заблокирован самим приложением, а
   // «поделиться геопозицией» в чате бота работает. Боту уходит запрос —
   // он отправит кнопку, исполнитель жмёт «Поделиться» и возвращается:
@@ -2699,6 +2726,8 @@ export default function App() {
                   }
                   onPosition={sendHomePos}
                   onRequestGeo={requestGeoBot}
+                  onEnableTrack={enableTrackBrowser}
+                  trackBusy={trackBusy}
                 />
               </React.Suspense>
             </>
@@ -3007,6 +3036,58 @@ export default function App() {
               orderId={detailOrderId}
               onClose={() => setDetailOrderId(null)}
             />
+          )}
+
+          {/* Одноразовый код для страницы GPS-трекинга в браузере */}
+          {trackCode && (
+            <div
+              onClick={() => setTrackCode(null)}
+              style={{
+                position: "fixed", inset: 0, zIndex: 70, background: "rgba(0,0,0,.5)",
+                display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+              }}
+            >
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{
+                  width: "100%", maxWidth: 380, borderRadius: 18, padding: 20,
+                  background: t.card, border: `1px solid ${t.border}`,
+                }}
+              >
+                <h3 style={{ margin: "0 0 6px", fontSize: 17 }}>Код для GPS-трекинга</h3>
+                <p style={{ margin: "0 0 14px", fontSize: 13, color: t.sub, lineHeight: 1.45 }}>
+                  Страница откроется в браузере телефона — там GPS работает.
+                  Координаты уйдут на карту диспетчера. Код одноразовый, живёт 10 минут.
+                </p>
+                <div style={{
+                  textAlign: "center", fontSize: 29, fontWeight: 900, letterSpacing: 5,
+                  padding: "14px 0", borderRadius: 14, background: t.accentSoft, color: t.accent,
+                }}>{trackCode.code}</div>
+                {trackErr && (
+                  <p style={{ margin: "10px 0 0", fontSize: 13, color: t.danger, fontWeight: 700 }}>
+                    {trackErr}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => window.open(trackCode.url + "#code=" + trackCode.code, "_blank")}
+                  style={{
+                    width: "100%", marginTop: 12, padding: 13, border: 0, borderRadius: 12,
+                    background: t.accent, color: "#fff", fontSize: 15, fontWeight: 800,
+                    fontFamily: "inherit", cursor: "pointer",
+                  }}
+                >Открыть страницу трекинга</button>
+                <button
+                  type="button"
+                  onClick={() => setTrackCode(null)}
+                  style={{
+                    width: "100%", marginTop: 8, padding: 12, border: 0, borderRadius: 12,
+                    background: "transparent", color: t.sub, fontSize: 14, fontWeight: 700,
+                    fontFamily: "inherit", cursor: "pointer",
+                  }}
+                >Закрыть</button>
+              </div>
+            </div>
           )}
         </>
       )}

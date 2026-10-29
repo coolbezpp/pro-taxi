@@ -23,8 +23,8 @@ def verify_password(p, h):
         return bcrypt.checkpw(str(p).encode("utf-8")[:72], (h or "").encode("utf-8"))
     except Exception:
         return False
-def create_token(user_id, role, sid=None):
-    payload = {"sub": str(user_id), "role": role, "exp": datetime.utcnow() + timedelta(days=30)}
+def create_token(user_id, role, sid=None, days=30):
+    payload = {"sub": str(user_id), "role": role, "exp": datetime.utcnow() + timedelta(days=days)}
     # sid — идентификатор живой сессии исполнителя (только он и попадает
     # в токен исполнителя; клиентские/админские токены sid не несут)
     if sid:

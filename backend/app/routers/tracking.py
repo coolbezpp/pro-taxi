@@ -1,3 +1,5 @@
+import hashlib
+import secrets as pysecrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,10 +10,18 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import Client, Executor, Order, OrderEvent, OrderMessage, User, ExecutorVehicle
-from ..security import bearer_scheme, ensure_executor_session
+from ..models import Client, Executor, Order, OrderEvent, OrderMessage, TrackingCode, User, ExecutorVehicle
+from ..security import bearer_scheme, create_token, ensure_executor_session
 
 router = APIRouter(prefix="/api", tags=["tracking"])
+
+# Страница GPS-трекинга: водитель берёт одноразовый код в миниаппе
+# (GPS в вебвью MAX заблокирован) и вводит его в системном браузере,
+# где navigator.geolocation работает штатно.
+TRACK_URL = "https://procityservice.ru/executor/track.html"
+CODE_TTL_MINUTES = 10
+# Без 0/O/1/I/L — чтобы код читалось с экрана телефона без путаницы
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 
 class PositionIn(BaseModel):
@@ -162,6 +172,97 @@ def update_position(
     executor.last_seen_at = datetime.utcnow()
     db.commit()
     return {"ok": True, "lat": executor.last_lat, "lon": executor.last_lon}
+
+
+def _hash_code(code: str) -> str:
+    """Хэш кода: сам код в БД не хранится, только отпечаток."""
+    return hashlib.sha256(f"{settings.jwt_secret}:{code}".encode()).hexdigest()
+
+
+class _TrackCodeOut(BaseModel):
+    code: str
+    expires_in: int
+    url: str
+
+
+@router.post("/executor/tracking-code", response_model=_TrackCodeOut)
+def issue_tracking_code(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """Миниапп выдаёт одноразовый код для страницы трекинга в браузере.
+
+    Живёт 10 минут, применяется один раз; предыдущие неиспользованные
+    коды исполнителя гасятся при выдаче нового.
+    """
+    payload = _decode(credentials)
+    if payload.get("role") != "executor":
+        raise HTTPException(status_code=403, detail="Только для исполнителя")
+    try:
+        executor = db.query(Executor).filter(Executor.id == int(payload.get("sub"))).first()
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Некорректный токен")
+    if not executor:
+        raise HTTPException(status_code=404, detail="Профиль не найден")
+
+    # Одна живая сессия: токен со старого устройства код не выдаёт
+    ensure_executor_session(payload, executor)
+
+    now = datetime.utcnow()
+    db.query(TrackingCode).filter(
+        TrackingCode.executor_id == executor.id,
+        TrackingCode.used_at.is_(None),
+    ).update({"used_at": now})
+
+    raw = "".join(pysecrets.choice(_CODE_ALPHABET) for _ in range(8))
+    db.add(TrackingCode(
+        executor_id=executor.id,
+        code_hash=_hash_code(raw),
+        expires_at=now + timedelta(minutes=CODE_TTL_MINUTES),
+    ))
+    db.commit()
+
+    return {
+        "code": f"{raw[:4]}-{raw[4:]}",
+        "expires_in": CODE_TTL_MINUTES * 60,
+        "url": TRACK_URL,
+    }
+
+
+class _TrackAuthIn(BaseModel):
+    code: str
+
+
+@router.post("/track/session")
+def track_session(data: _TrackAuthIn, db: Session = Depends(get_db)):
+    """Обмен одноразового кода на токен для страницы трекинга.
+
+    Токен живёт 7 дней и привязан к текущей сессии исполнителя: при
+    входе на другом устройстве страница трекинга попросит новый код.
+    """
+    raw = (data.code or "").replace("-", "").replace(" ", "").strip().upper()
+    if not raw or len(raw) > 20:
+        raise HTTPException(status_code=400, detail="Некорректный код")
+
+    now = datetime.utcnow()
+    row = db.query(TrackingCode).filter(
+        TrackingCode.code_hash == _hash_code(raw),
+        TrackingCode.used_at.is_(None),
+    ).first()
+    if not row or row.expires_at < now:
+        raise HTTPException(status_code=401, detail="Код недействителен или истёк")
+
+    executor = db.query(Executor).filter(Executor.id == row.executor_id).first()
+    if not executor:
+        raise HTTPException(status_code=404, detail="Профиль не найден")
+
+    row.used_at = now
+    db.commit()
+
+    return {
+        "token": create_token(executor.id, "executor", sid=executor.session_id, days=7),
+        "executor": {"id": executor.id, "name": executor.name or "Исполнитель"},
+    }
 
 
 @router.get("/orders/{order_id}/track")
