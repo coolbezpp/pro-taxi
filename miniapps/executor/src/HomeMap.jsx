@@ -19,7 +19,7 @@ const KKR_CENTER = [38.975, 45.035];
 // (PMTiles Краснодарского края), синяя точка «я здесь» с ореолом точности
 // и кнопка «показать меня». Свежий GPS всегда приоритетнее позиции из
 // профиля — устаревшая серверная точка не «привязывает» карту.
-export default function HomeMap({ t, position = null, full = false, onPosition = null, onRequestGeo = null, onEnableTrack = null, trackBusy = false }) {
+export default function HomeMap({ t, position = null, full = false, onPosition = null, onEnableTrack = null, trackBusy = false }) {
   const container = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -31,8 +31,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const [geoBlocked, setGeoBlocked] = useState(false); // геолокация запрещена
   const [attrOpen, setAttrOpen] = useState(false);     // раскрытая строка © OSM
   const [geoPending, setGeoPending] = useState(false); // ждём GPS-fix после запроса
-  const [diagRun, setDiagRun] = useState(false);       // идёт диагностика GPS
-  const [diagText, setDiagText] = useState("");        // короткий итог диагностики
   const [noPos, setNoPos] = useState(false);           // GPS не смог дать координаты
 
   // Высота с учётом safe-area (iPhone): низ карты не заезжает под навбар
@@ -116,129 +114,9 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     );
   };
 
-  // Ручной выбор места («я здесь») удалён по решению пользователя —
-  // место должно определяться внутри миниаппа. Осталась диагностика GPS:
-  // собираем, что видит страница в вебвью MAX, шлём на сервер (лог
-  // GEO_DIAG) и показываем короткий итог — пересказывать мелкий текст
-  // с телефона не придётся
-  const geoDiag = async () => {
-    const out = {};
-    try { out.ua = (navigator.userAgent || "").slice(0, 160); } catch (e) {}
-    try { out.iframe = window.self !== window.top; } catch (e) {}
-    // Каким транспортом ходят события в натив: Android-мост, iframe или
-    // ничего (fallback в SDK просто пишет в консоль — тогда мост мёртв)
-    try { out.wvh = !!window.WebViewHandler; } catch (e) {}
-    try {
-      out.webkit = window.webkit && window.webkit.messageHandlers
-        ? Object.keys(window.webkit.messageHandlers) : null;
-    } catch (e) { out.webkit = "err"; }
-    const W = window.WebApp;
-    out.sdk = !!W;
-    if (W) {
-      try { out.platform = W.platform; } catch (e) {}
-      try { out.ver = W.version; } catch (e) {}
-      try { out.qid = !!(W.initDataUnsafe && W.initDataUnsafe.query_id); } catch (e) {}
-      // Сырой запрос права «location» — вдруг нативная сторона умеет больше,
-      // чем обёртка SDK (в ней захардкожены только camera/mic)
-      try {
-        out.permRaw = await Promise.race([
-          W.requestController.createRequest(
-            "WebAppPermissionsRequestAccess",
-            { permissions: [{ location: true }], reason: "Диагностика геолокации" },
-            { timeout: 5000 }
-          ).then(r => "ok " + JSON.stringify(r))
-            .catch(e => "err " + JSON.stringify((e && e.error) || e)),
-          new Promise(r => setTimeout(() => r("timeout"), 6000)),
-        ]);
-      } catch (e) { out.permRaw = "throw " + String(e); }
-      // Нативный запрос вьюпорта без UI: отвечает — события SDK доходят
-      try {
-        out.viewport = await Promise.race([
-          Promise.resolve(W.getViewportSize())
-            .then(r => "ok " + JSON.stringify(r))
-            .catch(e => "err " + JSON.stringify((e && e.error) || e)),
-          new Promise(r => setTimeout(() => r("timeout"), 5000)),
-        ]);
-      } catch (e) { out.viewport = "throw " + String(e); }
-    }
-    try {
-      out.permQuery = navigator.permissions && navigator.permissions.query
-        ? (await navigator.permissions.query({ name: "geolocation" })).state
-        : "n/a";
-    } catch (e) { out.permQuery = "err " + String(e && e.message); }
-    // Сам GPS: фикс / код ошибки / полное молчание (таймаут молчания 9с)
-    out.geo = await new Promise(res => {
-      if (!navigator.geolocation) { res("no-api"); return; }
-      let done = false;
-      const fin = v => { if (!done) { done = true; res(v); } };
-      try {
-        navigator.geolocation.getCurrentPosition(
-          p => fin(`ok ${p.coords.latitude.toFixed(4)},${p.coords.longitude.toFixed(4)} ±${Math.round(p.coords.accuracy)}m`),
-          e => fin(`err code=${e.code} ${e.message || ""}`),
-          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-        );
-      } catch (e) { fin("throw " + String(e)); }
-      setTimeout(() => fin("silent"), 9000);
-    });
-    try {
-      out.globals = Object.keys(window)
-        .filter(k => /webview|miniapp|bridge|handler|oneme|tgwebview/i.test(k))
-        .slice(0, 25);
-    } catch (e) {}
-    return out;
-  };
-
-  const diagSummary = d => {
-    const gps = d.geo === "silent" ? "GPS молчит"
-      : String(d.geo || "").startsWith("ok") ? "GPS ответил!"
-      : `GPS: ${String(d.geo || "?").replace("err ", "")}`;
-    const bridge = String(d.viewport || "").startsWith("ok") ? "мост MAX работает"
-      : String(d.viewport || "").startsWith("timeout") ? "мост MAX молчит"
-      : d.sdk === false ? "SDK MAX не загрузился"
-      : `мост: ${d.viewport || "?"}`;
-    const perm = String(d.permRaw || "").startsWith("ok") ? " · право location ОК" : "";
-    return `${gps} · ${bridge}${perm}`;
-  };
-
-  // Тап «Определить точно»: пробуем GPS, а если через 7 секунд фикса нет —
-  // собираем диагностику вебвью и шлём её на сервер
-  const diagTimerRef = useRef(null);
-  const onGeoPress = () => {
-    startGeo();
-    if (diagTimerRef.current != null) return;
-    diagTimerRef.current = setTimeout(async () => {
-      diagTimerRef.current = null;
-      if (gpsRef.current) return; // GPS ожил — диагностика не нужна
-      setDiagRun(true);
-      let d;
-      try { d = await geoDiag(); } catch (e) { d = { err: String(e) }; }
-      setDiagRun(false);
-      try {
-        fetch("/api/geo/diag", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: d }),
-        }).catch(() => {});
-      } catch (e) {}
-      // Вдруг getCurrentPosition дал фикс, а watchPosition — нет
-      const m = String(d.geo || "").match(/ok ([-\d.]+),([-\d.]+)/);
-      if (m && mapRef.current) {
-        const lat = Number(m[1]);
-        const lon = Number(m[2]);
-        ensureMarker(lon, lat, null);
-        setNoPos(false);
-        setGeoBlocked(false);
-        gpsRef.current = true;
-        mapRef.current.flyTo({ center: [lon, lat], zoom: 13.8, duration: 800 });
-        if (onPosition) {
-          sentRef.current = Date.now();
-          onPosition(lat, lon, true);
-        }
-        return;
-      }
-      setDiagText(diagSummary(d));
-    }, 7000);
-  };
+  // Ручной выбор места («я здесь»), диагностика GPS и кнопки «поделиться
+  // в чате»/«повторить» удалены по решению пользователя: место добывается
+  // браузерным трекингом (кнопка «Включить GPS» → страница трекинга)
 
   useEffect(() => {
     let map;
@@ -249,7 +127,12 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         style: makeStyle(),
         center: position ? [position.lon, position.lat] : KKR_CENTER,
         zoom: position ? 13.4 : 11.6,
-        maxZoom: 14,
+        // Краснодарский край — карта мира не нужна. Приближать можно
+        // свободно (тайлы z15 переразмериваются), а отдалять дальше
+        // края нельзя: minZoom + жёсткие границы обзора
+        minZoom: 7,
+        maxZoom: 19,
+        maxBounds: [[37.0, 43.0], [42.0, 47.2]],
         attributionControl: false,
       });
       // Копирайт — свой статичный неинтерактивный ярлык в JSX (клик по
@@ -285,7 +168,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       return undefined;
     }
     return () => {
-      if (diagTimerRef.current != null) clearTimeout(diagTimerRef.current);
       if (watchIdRef.current != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
@@ -331,13 +213,13 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   }, [position]);
 
   // Кнопка «показать меня»: при живом GPS — подлёт к точке, как в Яндекс
-  // такси. Живого GPS пока нет — пробуем его добыть вместе с диагностикой
+  // такси. Живого GPS пока нет — пробуем его добыть ещё раз
   const recenter = () => {
     const map = mapRef.current;
     const marker = markerRef.current;
     if (!map) return;
     if (!gpsRef.current) {
-      onGeoPress();
+      startGeo();
       return;
     }
     if (marker) {
@@ -431,29 +313,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
               }}
             >{trackBusy ? "Готовлю код…" : "Включить GPS"}</button>
           )}
-          {onRequestGeo && (
-            <button
-              type="button"
-              onClick={onRequestGeo}
-              style={{
-                border: 0, cursor: "pointer", borderRadius: 999,
-                padding: "5px 11px", fontSize: 11, fontWeight: 800,
-                background: "#2f7bff", color: "#fff", fontFamily: "inherit",
-              }}
-            >Поделиться в чате</button>
-          )}
-          <button
-            type="button"
-            onClick={onGeoPress}
-            disabled={geoPending || diagRun}
-            style={{
-              border: 0, cursor: geoPending || diagRun ? "default" : "pointer",
-              borderRadius: 999,
-              padding: "5px 11px", fontSize: 11, fontWeight: 800,
-              background: geoPending || diagRun ? "#c7a54a" : "#8a6d00",
-              color: "#fff", fontFamily: "inherit",
-            }}
-          >{diagRun ? "Проверяю…" : geoPending ? "Ищу…" : "Повторить"}</button>
         </div>
       )}
       {/* GPS не смог дать координаты (нет спутников / таймаут) */}

@@ -47,6 +47,7 @@
   }
   button:disabled { opacity: .5; }
   button.stop { background: #3a3a41; }
+  button.ghost { background: transparent; border: 1px solid #3a3a41; color: #c9c9cf; }
   .hint { color: #98989e; font-size: 12.5px; line-height: 1.5; margin-top: 14px; }
   .hint b { color: #f2f2f7; }
   .err-text { color: #ff6961; font-size: 13px; margin-top: 10px; min-height: 18px; }
@@ -71,6 +72,7 @@
       Код — <b>одноразовый</b>, живёт 10 минут. Его можно взять в приложении
       исполнителя: главная → «Включить GPS».
     </p>
+    <button class="ghost" id="backBtnLogin">Вернуться в сервис</button>
   </div>
 
   <!-- Активный трекинг -->
@@ -82,6 +84,7 @@
     <div class="row"><span>Отправлено на сервер</span><b id="sent">—</b></div>
     <div class="row"><span>Последний раз</span><b id="last">—</b></div>
     <button class="stop" id="stopBtn">Остановить трекинг</button>
+    <button class="ghost" id="backBtn">Вернуться в сервис</button>
     <p class="hint" id="trackHint">
       Работает, пока страница открыта. Не закрывайте вкладку и не блокируйте
       экран — диспетер видит вас в реальном времени.
@@ -107,6 +110,10 @@
 
   var watchId = null, wakeLock = null;
   var sentCount = 0, lastSendAt = 0, lastPos = null;
+  // Ссылка на миниапп исполнителя в MAX: кнопка «Вернуться в сервис» и
+  // автовозврат после первого отправленного места ведут именно туда
+  var APP_LINK = "https://max.ru/se14320724_1_bot?startapp";
+  var autoReturned = false;
 
   function token() { try { return localStorage.getItem(LS_TOKEN); } catch (e) { return null; } }
   function execInfo() {
@@ -166,6 +173,11 @@
     if (v.length < 6) { loginErr.textContent = "Введите код из приложения"; return; }
     login(v);
   });
+
+  // Возврат в миниапп: обычная навигация — MAX подхватывает ссылку на бота
+  function backToApp() { location.href = APP_LINK; }
+  $("backBtn").addEventListener("click", backToApp);
+  $("backBtnLogin").addEventListener("click", backToApp);
   codeInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter") loginBtn.click();
   });
@@ -191,6 +203,14 @@
       lastEl.textContent = fmtTime(new Date());
       setState("live", "Трекинг включён");
       trackErr.textContent = "";
+      // Первое место дошло — возвращаем водителя в миниапп: дальше он
+      // работает там, а вкладка продолжает слать координаты, пока система
+      // держит её в фоне (Android) или до перехода в «сон» (iOS)
+      if (sentCount === 1 && !autoReturned) {
+        autoReturned = true;
+        setState("live", "Трекинг включён — открываю «Про»…");
+        setTimeout(function () { location.href = APP_LINK; }, 2500);
+      }
     }).catch(function () {
       setState("wait", "Нет связи — повторю");
     });
