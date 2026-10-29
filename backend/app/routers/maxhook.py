@@ -177,6 +177,16 @@ async def max_webhook(bot: str, request: Request, db: Session = Depends(get_db))
     if not isinstance(update, dict):
         return {"ok": True}
 
+    # Любая ошибка разбора не должна отдавать 500: MAX ретраит такие
+    # ответы и заваливает логи. Логируем и подтверждаем приём.
+    try:
+        _process_update(bot, update, db)
+    except Exception:
+        _log.exception("MAX_HOOK %s: ошибка разбора update", bot)
+    return {"ok": True}
+
+
+def _process_update(bot: str, update: dict, db: Session) -> None:
     etype = update.get("type") or update.get("update_type") or ""
     if etype not in ("message_created", "message_created_event"):
         # Прочие события (typing и т.п.) просто принимаем
@@ -215,8 +225,14 @@ async def max_webhook(bot: str, request: Request, db: Session = Depends(get_db))
             return {"ok": True}
 
     # Первое сообщение без location — покажем, как поделиться (один раз;
-    # пользователи, отправившие location, сюда не попадают)
-    body_text = (message.get("body") or "").strip().lower()
+    # пользователи, отправившие location, сюда не попадают).
+    # body приходит и строкой, и объектом {"text": ...} — формат MAX
+    # не зафиксирован, поэтому приводим к строке аккуратно (на живом
+    # проде dict ронял вебхук с 500 — MAX начал ретраить).
+    raw_body = message.get("body") or ""
+    if isinstance(raw_body, dict):
+        raw_body = raw_body.get("text") or raw_body.get("body") or ""
+    body_text = str(raw_body).strip().lower()
     sender_id = str(sender.get("user_id") or sender.get("id") or "")
     if bot == "executor" and sender_id and body_text in ("/гео", "гео", "геолокация"):
         send_max_message(
