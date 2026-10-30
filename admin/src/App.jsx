@@ -1,4 +1,5 @@
 import CityZones from "./CityZones";
+import Addresses from "./Addresses";
 import Fraud from "./Fraud";
 import { useEffect, useState } from "react";
 
@@ -324,6 +325,7 @@ const MENU = [
   { id: "notifications", icon: "bell", title: "Уведомления", count: "messages" },
   { id: "ads", icon: "mega", title: "Реклама" },
   { id: "city-zones", icon: "map", title: "Городские зоны", adminOnly: true },
+  { id: "addresses", icon: "pin", title: "Адреса", adminOnly: true },
   { id: "settings", icon: "gear", title: "Настройки", adminOnly: true },
   { id: "operators", icon: "person", title: "Операторы", adminOnly: true },
 ];
@@ -1419,6 +1421,7 @@ export default function App() {
         </div>
 
         {tab === "city-zones" && <CityZones />}
+        {tab === "addresses" && <Addresses />}
         {tab === "fraud" && <Fraud />}
 
         {tab === "orders" && (

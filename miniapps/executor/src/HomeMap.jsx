@@ -30,8 +30,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const watchIdRef = useRef(null); // id watchPosition (чтобы не дублировать)
   const [geoBlocked, setGeoBlocked] = useState(false); // геолокация запрещена
   const [attrOpen, setAttrOpen] = useState(false);     // раскрытая строка © OSM
-  const [geoPending, setGeoPending] = useState(false); // ждём GPS-fix после запроса
   const [noPos, setNoPos] = useState(false);           // GPS не смог дать координаты
+  const [noWebgl, setNoWebgl] = useState(false);       // вебвью не дало WebGL2
 
   // Высота с учётом safe-area (iPhone): низ карты не заезжает под навбар
   const height = full
@@ -80,7 +80,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const startGeo = () => {
     const map = mapRef.current;
     if (!map || watchIdRef.current != null || !navigator.geolocation) return;
-    setGeoPending(true);
     watchIdRef.current = navigator.geolocation.watchPosition(
       pos => {
         const lon = pos.coords.longitude;
@@ -88,7 +87,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         ensureMarker(lon, lat, pos.coords.accuracy);
         setGeoBlocked(false);
         setNoPos(false);
-        setGeoPending(false);
         if (!gpsRef.current) {
           gpsRef.current = true;
           map.flyTo({ center: [lon, lat], zoom: 13.8, duration: 1000 });
@@ -100,7 +98,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         }
       },
       err => {
-        setGeoPending(false);
         // code 1 — доступ к геолокации запрещён (в MAX это отказывает
         // само приложение, настройки телефона не всегда помогают)
         if (err && err.code === 1) {
@@ -114,13 +111,28 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     );
   };
 
-  // Ручной выбор места («я здесь»), диагностика GPS и кнопки «поделиться
-  // в чате»/«повторить» удалены по решению пользователя: место добывается
-  // браузерным трекингом (кнопка «Включить GPS» → страница трекинга)
+  // Ручной выбор места и диагностика удалены по решению пользователя: место
+  // добывается браузерным трекингом (кнопка «Включить GPS» → страница
+  // трекинга в системном браузере). Здесь только GPS-watch и ретраи.
 
   useEffect(() => {
     let map;
     let observer;
+    // maplibre v6 требует WebGL2. Вебвью MAX на части Android-устройств
+    // не даёт WebGL2-контекст — new Map() бросает, и раньше карта молча
+    // оставалась пустым прямоугольником. Проверяем заранее и показываем
+    // понятную заглушку вместо пустоты.
+    try {
+      const probe = document.createElement("canvas");
+      const gl = probe.getContext("webgl2");
+      if (!gl) {
+        setNoWebgl(true);
+        return undefined;
+      }
+    } catch (e) {
+      setNoWebgl(true);
+      return undefined;
+    }
     try {
       map = new Map({
         container: container.current,
@@ -132,7 +144,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         // края нельзя: minZoom + жёсткие границы обзора
         minZoom: 7,
         maxZoom: 19,
-        maxBounds: [[37.0, 43.0], [42.0, 47.2]],
+        // maxBounds: [[югоЗапад], [североВосток]] — порядок важен
+        maxBounds: [[37.0, 42.0], [43.0, 47.2]],
         attributionControl: false,
       });
       // Копирайт — свой статичный неинтерактивный ярлык в JSX (клик по
@@ -165,6 +178,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         }
       } catch (e) {}
     } catch (e) {
+      // new Map() бросил (нет WebGL2/контекст потерян) — показываем заглушку
+      setNoWebgl(true);
       return undefined;
     }
     return () => {
@@ -231,6 +246,60 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       });
     }
   };
+
+  // Вебвью MAX на части Android-устройств не даёт WebGL2: карта не может
+  // отрисоваться. Вместо пустого прямоугольника — заглушка с объяснением
+  // и рабочей кнопкой «Включить GPS» (трекинг работает без WebGL).
+  if (noWebgl) {
+    return (
+      <div style={{
+        position: "relative",
+        width: full ? "calc(100% + 32px)" : "100%",
+        margin: full ? "0 -16px" : 0,
+        height,
+        borderRadius: full ? 0 : 18,
+        background: t.mapBg,
+        border: full ? "none" : `1px solid ${t.border}`,
+        marginBottom: full ? 0 : 12,
+        display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        gap: 10, padding: "18px 20px", textAlign: "center",
+      }}>
+        <div style={{
+          width: 44, height: 44, borderRadius: 14,
+          background: t.card, border: `1px solid ${t.border}`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+            stroke={t.sub} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-2.5m-6 2.5V3.5m6 14l5.5 2V6l-5.5-2.5m0 14V3.5" />
+          </svg>
+        </div>
+        <div style={{ fontWeight: 800, fontSize: 14.5, color: t.text, lineHeight: 1.35 }}>
+          Карта временно недоступна
+        </div>
+        <div style={{ fontSize: 12.5, color: t.sub, lineHeight: 1.5, maxWidth: 280 }}>
+          Ваше устройство не поддерживает отрисовку карты (WebGL).
+          Заказы и GPS-позиция работают — геопозиция обновляется кнопкой ниже.
+        </div>
+        {onEnableTrack && (
+          <button
+            type="button"
+            onClick={onEnableTrack}
+            disabled={trackBusy}
+            style={{
+              marginTop: 4, padding: "10px 18px", borderRadius: 12,
+              background: "#2f7bff", color: "#fff", border: "none",
+              fontWeight: 800, fontSize: 13.5, cursor: "pointer",
+              opacity: trackBusy ? 0.6 : 1,
+            }}
+          >
+            {trackBusy ? "Открываю…" : "Включить GPS"}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -339,52 +408,6 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
               }}
             >{trackBusy ? "Готовлю код…" : "Включить GPS"}</button>
           )}
-          {onRequestGeo && (
-            <button
-              type="button"
-              onClick={onRequestGeo}
-              style={{
-                border: 0, cursor: "pointer", borderRadius: 999,
-                padding: "5px 11px", fontSize: 11, fontWeight: 800,
-                background: "#2f7bff", color: "#fff", fontFamily: "inherit",
-              }}
-            >Поделиться в чате</button>
-          )}
-          <button
-            type="button"
-            onClick={onGeoPress}
-            disabled={geoPending || diagRun}
-            style={{
-              border: 0, cursor: geoPending || diagRun ? "default" : "pointer",
-              borderRadius: 999,
-              padding: "5px 11px", fontSize: 11, fontWeight: 800,
-              background: geoPending || diagRun ? "#98a2b3" : "#2f7bff",
-              color: "#fff", fontFamily: "inherit",
-            }}
-          >{diagRun ? "Проверяю…" : geoPending ? "Ищу…" : "Определить снова"}</button>
-        </div>
-      )}
-      {/* Итог диагностики GPS: короткая строка под верхним баннером */}
-      {diagText && !geoBlocked && !noPos && (
-        <div style={{
-          position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
-          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "6px 12px",
-          borderRadius: 999, background: "rgba(30,34,40,.88)", color: "#fff",
-          fontSize: 10.5, fontWeight: 700, lineHeight: 1.35, textAlign: "center",
-          boxShadow: "0 6px 16px rgba(0,0,0,.25)",
-        }}>
-          Диагностика: {diagText}
-        </div>
-      )}
-      {diagText && (geoBlocked || noPos) && (
-        <div style={{
-          position: "absolute", top: 62, left: "50%", transform: "translateX(-50%)",
-          zIndex: 3, maxWidth: "calc(100% - 24px)", padding: "5px 12px",
-          borderRadius: 999, background: "rgba(30,34,40,.88)", color: "#fff",
-          fontSize: 10.5, fontWeight: 700, lineHeight: 1.35, textAlign: "center",
-          boxShadow: "0 6px 16px rgba(0,0,0,.25)",
-        }}>
-          Диагностика: {diagText}
         </div>
       )}
       <style>{`

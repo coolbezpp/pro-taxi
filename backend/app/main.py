@@ -2420,6 +2420,9 @@ def export_executors_csv(admin=Depends(get_admin), db: Session = Depends(get_db)
 from app.routers.geo import router as geo_router
 app.include_router(geo_router)
 
+from app.routers.addresses import router as addresses_router
+app.include_router(addresses_router)
+
 
 # --- Городские зоны ---
 import json

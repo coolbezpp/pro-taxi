@@ -56,7 +56,10 @@ _login_attempts: dict[str, deque] = {}
 
 
 def _admin_password() -> str:
-    return os.getenv("ADMIN_PASSWORD", "change-me-please")
+    pw = os.getenv("ADMIN_PASSWORD")
+    if not pw:
+        raise RuntimeError("ADMIN_PASSWORD не задан в окружении")
+    return pw
 
 
 def _sweep_sessions() -> None:

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import math
 import os
@@ -145,10 +144,52 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 @router.get("/search")
-async def search_places(q: str, lat: float | None = None, lon: float | None = None):
+async def search_places(
+    q: str,
+    lat: float | None = None,
+    lon: float | None = None,
+    city: str | None = None,
+    db: Session = Depends(get_db),
+):
     query = (q or "").strip()
     if len(query) < 3:
         return []
+
+    # Собственный справочник адресов (admin → «Адреса») приоритетнее OSM:
+    # посёлки, новостройки и «кривые» адреса, которых в OpenStreetMap нет.
+    city_q = (city or "").strip()
+    own_results: list[SearchOut] = []
+    if len(query) >= 3:
+        own_rows = (
+            db.query(models.AddressEntry)
+            .filter(
+                models.AddressEntry.active == True,  # noqa: E712
+                models.AddressEntry.city == city_q,
+                models.AddressEntry.title.ilike(f"%{query}%"),
+            )
+            .order_by(models.AddressEntry.created_at.desc())
+            .limit(10)
+            .all()
+        )
+        own_results = [
+            SearchOut(
+                title=row.title,
+                lat=row.lat,
+                lon=row.lon,
+                distance_km=(
+                    _haversine_km(lat, lon, row.lat, row.lon)
+                    if lat is not None and lon is not None
+                    else None
+                ),
+            )
+            for row in own_rows
+        ]
+
+    if own_results:
+        # Свои адреса возвращаем первой — приоритет над OSM
+        if lat is not None and lon is not None:
+            own_results.sort(key=lambda x: x.distance_km or 0.0)
+        return own_results
 
     providers = [
         {
@@ -274,27 +315,3 @@ def detect_city(lat: float, lon: float, db: Session = Depends(get_db)):
         pass
 
     return {"city": None, "source": None}
-
-
-_log = logging.getLogger("pro.geo.diag")
-
-
-class DiagIn(BaseModel):
-    # Произвольный отчёт вебвью: что видит JS (мост MAX, разрешения, GPS)
-    data: dict = Field(default_factory=dict)
-
-
-@router.post("/diag")
-async def geo_diag(payload: DiagIn):
-    """Разовая диагностика гео в вебвью MAX.
-
-    Миниапп шлёт сюда результаты пробы: жив ли нативный мост SDK
-    (WebAppGetViewportSize), отвечает ли запрос права location, что
-    возвращает navigator.geolocation (фикс / код ошибки / молчание).
-    Читаем в логах: docker compose logs api | grep GEO_DIAG
-    """
-    raw = json.dumps(payload.data, ensure_ascii=False, default=str)
-    if len(raw) > 6000:
-        raise HTTPException(413, "Отчёт диагностики слишком большой")
-    _log.warning("GEO_DIAG %s", raw)
-    return {"ok": True}

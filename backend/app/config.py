@@ -1,7 +1,9 @@
 from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str = "postgresql://pro:change_me@db:5432/pro"
-    jwt_secret: str = "change_me"
+    # Секрет JWT обязателен из окружения (JWT_SECRET): падать с открытым
+    # дефолтным «change_me» нельзя — токены с известным секретом бесполезны
+    jwt_secret: str
     max_client_bot_token: str = ""
     max_executor_bot_token: str = ""
     # Секрет вебхука MAX: шлётся в подписке (POST /subscriptions) и

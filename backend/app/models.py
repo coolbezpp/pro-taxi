@@ -484,5 +484,24 @@ class TrackingCode(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class AddressEntry(Base):
+    """Справочник адресов — приоритет над OSM в подсказках (/api/geo/search).
+
+    Порыл OSM часто не знает посёлки, новостройки и «кривые» адреса.
+    Админ добавляет адрес здесь (админка → «Адреса»), и он первым
+    появляется в подсказках клиентского миниаппа.
+    """
+
+    __tablename__ = "address_entries"
+
+    id = Column(Integer, primary_key=True)
+    city = Column(String(120), nullable=False, index=True)
+    title = Column(String(300), nullable=False)
+    lat = Column(Float, nullable=False)
+    lon = Column(Float, nullable=False)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 
 
