@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useTheme } from "./theme.js";
-import { setExecutorToken } from "./api.js";
+import { setExecutorToken, getExecutorToken } from "./api.js";
 import { getDeviceId } from "./deviceId.js";
 
 function getWebApp() {
@@ -24,8 +24,13 @@ function getInitData() {
 }
 
 export default function ContactGate({ children }) {
+  // Вход запоминается на устройстве: токен исполнителя живёт в localStorage
+  // (ключ executor_token) и переживает закрытие миниаппа. sessionStorage больше
+  // не участвует — он стирался при каждом закрытии и заставлял подтверждать
+  // номер заново. Токен истёк или вошли с другого устройства (антифрод-сессия)
+  // → App встретит 401 и покажет экран кика/входа.
   const [state, setState] = useState(
-    sessionStorage.getItem("executor_contact_ok") === "1" ? "ready" : "ask"
+    getExecutorToken() ? "ready" : "ask"
   );
   const [error, setError] = useState("");
   const { t } = useTheme();
@@ -75,7 +80,6 @@ export default function ContactGate({ children }) {
 
       const payload = await res.json().catch(() => ({}));
       if (payload?.token) setExecutorToken(payload.token);
-      sessionStorage.setItem("executor_contact_ok", "1");
       setState("ready");
     } catch (e) {
       setError(e.message || "Не удалось подтвердить номер");

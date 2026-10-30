@@ -21,12 +21,27 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
   const container = useRef(null);
   const mapRef = useRef(null);
   const markers = useRef({});
+  const followedRef = useRef(false); // камера уже наводилась на исполнителя
   const [ready, setReady] = useState(false);
+  const [noWebgl, setNoWebgl] = useState(false); // вебвью не дало WebGL2
   const [attrOpen, setAttrOpen] = useState(false); // раскрытая строка © OSM
 
   useEffect(() => {
     let map;
     let observer;
+    // maplibre v6 требует WebGL2. Вебвью MAX на части устройств не даёт
+    // WebGL2-контекст — раньше карта молча оставалась пустой. Проверяем
+    // заранее и показываем заглушку вместо пустоты.
+    try {
+      const probe = document.createElement("canvas");
+      if (!probe.getContext("webgl2")) {
+        setNoWebgl(true);
+        return undefined;
+      }
+    } catch (e) {
+      setNoWebgl(true);
+      return undefined;
+    }
     try {
       map = new Map({
         container: container.current,
@@ -124,7 +139,8 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
     }
   }, [from, to, ready, t.accent, t.success]);
 
-  // Маркер исполнителя
+  // Маркер исполнителя: плавно ведём точку и при первом появлении наводим
+  // камеру (дальше клиент может свободно отмотать — не дёргаем его зум).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || !executor) return;
@@ -152,7 +168,37 @@ export default function TrackMap({ from, to, executor, t, height = 240 }) {
     } else {
       markers.current.executor.setLngLat([executor.lon, executor.lat]);
     }
+    // Наводим камеру один раз — при первом известном местоположении
+    if (!followedRef.current) {
+      followedRef.current = true;
+      map.easeTo({ center: [executor.lon, executor.lat], zoom: Math.max(map.getZoom(), 14), duration: 700 });
+    }
   }, [executor, ready, t.amber]);
+
+  // Вебвью MAX на части устройств не даёт WebGL2 — карта не рисуется.
+  // Вместо пустого прямоугольника показываем текстовое «слежение».
+  if (noWebgl) {
+    return (
+      <div style={{
+        width: "100%", height, borderRadius: 16, background: t.card,
+        border: `1px solid ${t.border}`, padding: 16,
+        display: "flex", flexDirection: "column", gap: 8,
+        alignItems: "center", justifyContent: "center", textAlign: "center",
+      }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>
+          Карта недоступна на этом устройстве
+        </div>
+        <div style={{ fontSize: 12.5, color: t.sub, lineHeight: 1.5 }}>
+          Слежение за исполнителем работает: позиция обновляется, когда исполнитель в пути.
+        </div>
+        {executor?.lat != null && (
+          <div style={{ fontSize: 12.5, color: t.accent, fontWeight: 700 }}>
+            Исполнитель {executor.name} сейчас на связи
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{

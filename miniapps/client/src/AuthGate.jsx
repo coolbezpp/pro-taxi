@@ -41,13 +41,11 @@ function inMaxShell() {
 
 export default function AuthGate({ children }) {
   const [token] = useState(() => localStorage.getItem("token"));
-  // Номер подтверждаем при каждом открытии миниаппа — так же, как у
-  // исполнителя (ContactGate): один раз подтвердил — сессия вошла.
-  const [confirmed] = useState(
-    () =>
-      sessionStorage.getItem("client_contact_ok") === "1" &&
-      Boolean(localStorage.getItem("token"))
-  );
+  // Вход запоминается на устройстве: JWT-токен живёт в localStorage и
+  // переживает закрытие миниаппа. sessionStorage больше не участвует — он
+  // стирался при каждом закрытии и заставлял подтверждать номер заново.
+  // Токен истёк или вошли с другого устройства → первый же запрос вернёт
+  // 401, приложение сбросит токен и покажет экран входа.
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const autoAsked = useRef(false);
@@ -120,7 +118,6 @@ export default function AuthGate({ children }) {
       }
 
       localStorage.setItem("token", data.token);
-      sessionStorage.setItem("client_contact_ok", "1");
       window.location.reload();
     } catch (e) {
       // PRO_ERROR_DEBUG
@@ -146,7 +143,7 @@ export default function AuthGate({ children }) {
   // В MAX номер спрашиваем сразу при открытии; кнопка остаётся для
   // повторной попытки и для открытия вне оболочки MAX.
   useEffect(() => {
-    if (confirmed || autoAsked.current) return;
+    if (token || autoAsked.current) return;
     const webApp = getWebApp();
     if (
       inMaxShell() &&
@@ -159,7 +156,7 @@ export default function AuthGate({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (confirmed && token) return children;
+  if (token) return children;
 
   return (
     <div style={{

@@ -226,8 +226,9 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
         )}
       </div>
 
-      {/* Слежение за исполнителем */}
-      {executor && (
+      {/* Слежение за исполнителем: карта видна с момента заказа —
+          сначала маршрут А→Б, затем точка исполнителя в пути */}
+      {(from || to || executor) && (
         <div style={{ marginTop: 12 }}>
           <React.Suspense fallback={
             <div style={{ height: 230, borderRadius: 14, background: t.card, border: `1px solid ${t.border}` }} />

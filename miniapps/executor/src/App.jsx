@@ -2349,18 +2349,81 @@ export default function App() {
     }).catch(() => {});
   };
 
-  // GPS-трекинг через системный браузер телефона: в вебвью MAX GPS заблокирован
-  // самим приложением, а браузер отдаёт navigator.geolocation штатно.
-  // Миниапп выдаёт одноразовый код (живёт 10 минут) и открывает страницу
-  // /executor/track.html — она шлёт координаты на карту диспетчера
-  // каждые ~10 секунд, пока открыта.
+  // GPS-трекинг. Позиция нужна диспетчеру всегда, пока исполнитель на линии.
+  // Пробуем геолокацию СРАЗУ в вебвью (в фоне, без браузера): если вебвью её
+  // отдаёт — всё работает автоматически. Если вебвью заблокировала геолокацию
+  // (доказано на Android) — только тогда фолбэк на одноразовый код и системный
+  // браузер (страница /executor/track.html шлёт координаты сама).
   const [trackCode, setTrackCode] = useState(null);
   const [trackBusy, setTrackBusy] = useState(false);
   const [trackErr, setTrackErr] = useState("");
+  const [gpsActive, setGpsActive] = useState(false); // вебвью отдаёт GPS в фоне
+  const gpsWatchRef = useRef(null);
 
+  // Фоновый watchPosition: пока исполнитель онлайн, шлём позицию на сервер.
+  // Запускается автоматически при выходе на линию — без кнопок и браузера.
+  useEffect(() => {
+    if (!me || !online || !navigator.geolocation) return undefined;
+    const send = (lat, lon) => {
+      api(`/executors/${me.id}/position`, {
+        method: "POST",
+        body: { lat, lon },
+      }).catch(() => {});
+    };
+    try {
+      gpsWatchRef.current = navigator.geolocation.watchPosition(
+        pos => {
+          setGpsActive(true);
+          send(pos.coords.latitude, pos.coords.longitude);
+        },
+        () => {
+          // вебвью не дала GPS — оставляем фолбэк через браузер
+          setGpsActive(false);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+      );
+    } catch (e) {
+      setGpsActive(false);
+    }
+    return () => {
+      if (gpsWatchRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(gpsWatchRef.current);
+        gpsWatchRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me && me.id, online]);
+
+  // Кнопка «Включить GPS»: сначала тихо пробуем вебвью (фон, без браузера).
+  // Успех → позиция уже идёт, браузер не нужен. Отказ → одноразовый код и
+  // системный браузер как запасной путь.
   const enableTrackBrowser = async () => {
     setTrackBusy(true);
     setTrackErr("");
+
+    // 1. Пробуем геолокацию прямо здесь, в вебвью
+    if (navigator.geolocation) {
+      try {
+        const pos = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0,
+          });
+        });
+        await api(`/executors/${me.id}/position`, {
+          method: "POST",
+          body: { lat: pos.coords.latitude, lon: pos.coords.longitude },
+        });
+        setGpsActive(true);
+        setTrackBusy(false);
+        return;
+      } catch (e) {
+        // вебвью отказала — идём в браузер
+      }
+    }
+
+    // 2. Фолбэк: одноразовый код + системный браузер
     try {
       const res = await api("/executor/tracking-code", { method: "POST" });
       setTrackCode(res);
@@ -2370,11 +2433,39 @@ export default function App() {
         // вебвью запретила открытие — код остаётся в модалке, ссылка там же
       }
     } catch (e) {
-      setTrackErr("Не удалось получить код — попробуйте ещё раз");
+      setTrackErr("GPS недоступен — не удалось получить код для браузера");
     } finally {
       setTrackBusy(false);
     }
   };
+
+  // При входе проверяем геолокацию: один раз получаем начальную точку и
+  // шлём её на сервер, чтобы карта диспетчера была сразу наполнена. Это
+  // инициализация GPS при авторизации — без неё позиция появляется только
+  // после запуска слежения за активным заказом.
+  const geoOnceRef = useRef(false);
+  useEffect(() => {
+    if (!me || !navigator.geolocation) return;
+    if (geoOnceRef.current) return;
+    geoOnceRef.current = true;
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        setGpsActive(true);
+        try {
+          await api(`/executors/${me.id}/position`, {
+            method: "POST",
+            body: { lat: pos.coords.latitude, lon: pos.coords.longitude },
+          });
+        } catch (e) {
+          // сеть недоступна — попробует фоновый watch
+        }
+      },
+      () => {
+        setGpsActive(false);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
+    );
+  }, [me && me.id]);
 
   // Геопозиция для слежения за исполнителем: пока есть активный заказ
   useEffect(() => {
@@ -2672,13 +2763,24 @@ export default function App() {
                 <div style={{ fontSize: 9.5, fontWeight: 750, color: t.sub, marginTop: 2 }}>Исполнитель</div>
               </div>
             </div>
-            <button
-              onClick={toggleOnline}
-              style={{ ...s.onlineBtn(online), opacity: work && !work.can_accept_orders ? 0.55 : 1 }}
-            >
-              <span style={s.onlineDot(online)} />
-              {online ? "Работаю" : "Отдыхаю"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Статус GPS: в фоне (вебвью) или только через браузер */}
+              <span style={{
+                fontSize: 10.5, fontWeight: 800, padding: "5px 9px", borderRadius: 999,
+                background: gpsActive ? "rgba(23,178,106,.12)" : "rgba(217,43,69,.10)",
+                color: gpsActive ? "#177e46" : "#d92b45",
+                border: `1px solid ${gpsActive ? "rgba(23,178,106,.35)" : "rgba(217,43,69,.30)"}`,
+              }}>
+                GPS {gpsActive ? "в фоне" : "нет"}
+              </span>
+              <button
+                onClick={toggleOnline}
+                style={{ ...s.onlineBtn(online), opacity: work && !work.can_accept_orders ? 0.55 : 1 }}
+              >
+                <span style={s.onlineDot(online)} />
+                {online ? "Работаю" : "Отдыхаю"}
+              </button>
+            </div>
           </header>
 
           {page === "home" && (
