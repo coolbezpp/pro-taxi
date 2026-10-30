@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from app.config import settings
-from app.db import get_db
+from app.db import get_db, SessionLocal
 from app import models, pricing, worktime, rating
 from app.services import antifraud
 from app.security import create_token, hash_password, verify_password, get_current_user, get_staff
@@ -2886,9 +2886,53 @@ from .routers.fraud import router as fraud_router
 app.include_router(fraud_router)
 
 
+ORDER_STALE_MINUTES = 5
+
+
+async def _order_timeout_watcher():
+    """Авто-закрытие заказов, которые не были приняты исполнителем в течение
+    5 минут (пока исполнитель не взял заказ, он живёт в статусе created).
+    После истечения окна заказ закрывается (cancelled), клиенту уходит
+    уведомление — с ним можно сразу предложить заказать ещё раз."""
+    import asyncio as _a
+    from app.services.max_notify import send_max_message
+    while True:
+        try:
+            db = SessionLocal()
+            now = datetime.utcnow()
+            stale = (
+                db.query(models.Order)
+                .filter(
+                    models.Order.status == "created",
+                    models.Order.created_at < now - timedelta(minutes=ORDER_STALE_MINUTES),
+                )
+                .all()
+            )
+            for o in stale:
+                o.status = "cancelled"
+                db.add(models.OrderEvent(order_id=o.id, event="cancelled", payload={"reason": "timeout"}))
+                db.commit()
+                try:
+                    if o.client_id:
+                        client = db.query(models.Client).filter(models.Client.id == o.client_id).first()
+                        if client:
+                            send_max_message(
+                                client.max_id,
+                                f"Заказ №{o.id} закрыт: исполнитель не принял его в течение 5 минут. Хотите, чтобы мы нашли исполнителя ещё раз?",
+                                bot="client",
+                            )
+                except Exception:
+                    pass
+            db.close()
+        except Exception:
+            pass
+        await _a.sleep(30)
+
+
 @app.on_event("startup")
-def _subscribe_max_webhooks():
+async def _on_startup():
     """Подписки вебхуков MAX сбрасываются при перезапуске бота —
     пересоздаём на каждом старте api (в фоне, старт не ждёт MAX)."""
     import asyncio
     asyncio.get_event_loop().run_in_executor(None, subscribe_webhooks)
+    asyncio.get_event_loop().create_task(_order_timeout_watcher())
