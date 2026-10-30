@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import TripMap from "./TripMap.jsx";
 
 // Окно заказа: адреса вводятся вручную, подсказки — ближайшие к клиенту,
 // расстояние и цена считаются автоматически, допуслуги и комментарий — здесь же.
+// Режим «Карта» использует готовый TripMap (клик/поиск/маршрут) для выбора
+// точек подачи и назначения вместо ручного ввода текста.
 export default function OrderForm({
   s,
   t,
@@ -32,6 +35,7 @@ export default function OrderForm({
   const [calcError, setCalcError] = useState("");
   const [busy, setBusy] = useState(false);
   const reqId = useRef(0);
+  const [useMap, setUseMap] = useState(false); // режим выбора точек: карта ↔ ручной ввод
 
   // Геопозиция клиента — чтобы подсказки шли ближайшие к нему
   useEffect(() => {
@@ -216,7 +220,44 @@ export default function OrderForm({
         </div>
       )}
 
+      {/* Режим выбора адресов: ручной ввод или точка на карте */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <button
+          type="button"
+          onClick={() => setUseMap(false)}
+          style={{
+            flex: 1, padding: "10px 12px", borderRadius: 12, cursor: "pointer",
+            border: `1px solid ${useMap ? t.border : t.accent}`,
+            background: useMap ? t.card : t.accentSoft,
+            color: useMap ? t.text : t.accent, fontWeight: 800, fontSize: 13, fontFamily: "inherit",
+          }}
+        >Вручную</button>
+        <button
+          type="button"
+          onClick={() => setUseMap(true)}
+          style={{
+            flex: 1, padding: "10px 12px", borderRadius: 12, cursor: "pointer",
+            border: `1px solid ${useMap ? t.accent : t.border}`,
+            background: useMap ? t.accentSoft : t.card,
+            color: useMap ? t.accent : t.text, fontWeight: 800, fontSize: 13, fontFamily: "inherit",
+          }}
+        >На карте</button>
+      </div>
+
       {/* Адреса */}
+      {useMap ? (
+        <TripMap
+          from={from}
+          to={to}
+          executor={null}
+          t={t}
+          height={300}
+          city={city}
+          onPointsChange={next => { if (next?.from) setFrom({ title: next.from.title || "Точка подачи на карте", lat: next.from.lat, lon: next.from.lon }); if (next?.to) setTo({ title: next.to.title || "Точка назначения на карте", lat: next.to.lat, lon: next.to.lon }); }}
+          onAddressesChange={() => {}}
+          onRouteChange={res => { if (res) setRoute({ distance_km: Number(res.distanceKm), duration_min: Number(res.durationMin) }); }}
+        />
+      ) : (
       <div style={{ background: t.card, borderRadius: 18, border: `1px solid ${t.border}`, padding: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{
@@ -289,6 +330,7 @@ export default function OrderForm({
           <p style={{ margin: "10px 2px 0", fontSize: 12, color: t.sub }}>Ищем адреса…</p>
         )}
       </div>
+      )}
 
       {/* Маршрут и цена */}
       {route && (
