@@ -2208,6 +2208,9 @@ def admin_dashboard(
         if s:
             item = _exec_json(e)
             item.update({
+                # id отстранения — чтобы кнопка «Снять» на дашборде
+                # могла дёрнуть revoke без похода в профиль
+                "suspension_id": s.id,
                 "ends_at": s.ends_at.isoformat() if s.ends_at else None,
                 "reason": s.reason,
                 "source": s.source,

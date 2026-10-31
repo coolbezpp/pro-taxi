@@ -471,6 +471,8 @@ export default function App() {
   const [dashPeriod, setDashPeriod] = useState(30);
   const [dashRole, setDashRole] = useState("");
   const [dashDistrict, setDashDistrict] = useState("");
+  // id исполнителя, чью блокировку снимаем прямо сейчас (чтобы кнопка грузилась)
+  const [busyUnblock, setBusyUnblock] = useState(null);
   const [needLogin, setNeedLogin] = useState(false);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -932,6 +934,50 @@ export default function App() {
       setDash(data);
     } catch (e) {
       setDash({ totals: null });
+    }
+  }
+
+  // --- Разблокировка исполнителя (админ и оператор) ---------------------------
+  // Два вида блокировки — два действия:
+  // 1) отклонённая верификация (rejected) → вернуть approved;
+  // 2) активное отстранение → снять досрочно.
+  async function unblockExecutor(executorId) {
+    setBusyUnblock(executorId);
+    try {
+      const res = await fetch(`${API}/admin/executors/${executorId}/status`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "approved" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Не удалось разблокировать");
+      await loadDashboard();
+      await loadExecutors();
+      if (profileId === executorId) await openExecutorProfile(executorId);
+    } catch (e) {
+      setError(e.message || "Не удалось разблокировать исполнителя");
+    } finally {
+      setBusyUnblock(null);
+    }
+  }
+
+  async function revokeSuspension(executorId, suspensionId) {
+    setBusyUnblock(executorId);
+    try {
+      const res = await fetch(
+        `${API}/admin/executors/${executorId}/suspensions/${suspensionId}/revoke`,
+        { method: "POST", credentials: "include" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Не удалось снять отстранение");
+      await loadDashboard();
+      await loadExecutors();
+      if (profileId === executorId) await openExecutorProfile(executorId);
+    } catch (e) {
+      setError(e.message || "Не удалось снять отстранение");
+    } finally {
+      setBusyUnblock(null);
     }
   }
 
@@ -2378,6 +2424,16 @@ export default function App() {
                         padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 800,
                         background: "#ffe9ec", color: "#d92b45",
                       }}>отклонён</span>
+                      <button
+                        onClick={() => unblockExecutor(e.id)}
+                        disabled={busyUnblock === e.id}
+                        style={{
+                          marginLeft: "auto", padding: "6px 13px", borderRadius: 999, border: 0,
+                          background: "#e6f7ed", color: "#177e46", cursor: "pointer",
+                          fontSize: 12, fontWeight: 800, fontFamily: "inherit",
+                          opacity: busyUnblock === e.id ? 0.6 : 1,
+                        }}
+                      >{busyUnblock === e.id ? "…" : "Разблокировать"}</button>
                     </div>
                   ))}
                 </div>
@@ -2411,6 +2467,18 @@ export default function App() {
                       }}>
                         {e.source === "auto" ? "автоматически" : "вручную"}
                       </span>
+                      {e.suspension_id && (
+                        <button
+                          onClick={() => revokeSuspension(e.id, e.suspension_id)}
+                          disabled={busyUnblock === e.id}
+                          style={{
+                            marginLeft: "auto", padding: "6px 13px", borderRadius: 999, border: 0,
+                            background: "#e6f7ed", color: "#177e46", cursor: "pointer",
+                            fontSize: 12, fontWeight: 800, fontFamily: "inherit",
+                            opacity: busyUnblock === e.id ? 0.6 : 1,
+                          }}
+                        >{busyUnblock === e.id ? "…" : "Снять отстранение"}</button>
+                      )}
                       {e.reason && (
                         <span style={{ flexBasis: "100%", color: "#77748a", fontSize: 12 }}>
                           {e.reason}
@@ -2893,6 +2961,31 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+
+                  {/* Разблокировка: отклонённая верификация = заказы не поступают.
+                      Кнопку видят и админ, и оператор (панель работает на get_staff) */}
+                  {profile.executor.status !== "approved" && (
+                    <div style={{
+                      marginTop: 12, padding: 12, borderRadius: 12,
+                      background: "#ffe9ec", border: "1px solid #ffb8c2",
+                      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                    }}>
+                      <span style={{ fontSize: 13, color: "#d92b45", fontWeight: 750, flex: 1, minWidth: 180 }}>
+                        Верификация {profile.executor.status === "rejected" ? "отклонена" : "не пройдена"} —
+                        новые заказы не поступают.
+                      </span>
+                      <button
+                        onClick={() => unblockExecutor(profileId)}
+                        disabled={busyUnblock === profileId}
+                        style={{
+                          padding: "8px 15px", borderRadius: 10, border: 0, cursor: "pointer",
+                          background: "#e6f7ed", color: "#177e46",
+                          fontSize: 13, fontWeight: 800, fontFamily: "inherit",
+                          opacity: busyUnblock === profileId ? 0.6 : 1,
+                        }}
+                      >{busyUnblock === profileId ? "…" : "Разблокировать"}</button>
+                    </div>
+                  )}
 
                   {/* Текущая смена */}
                   <div style={{ marginTop: 16 }}>

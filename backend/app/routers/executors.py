@@ -1378,19 +1378,22 @@ class AdminSuspensionIn(BaseModel):
 def admin_suspend_executor(
     executor_id: int,
     data: AdminSuspensionIn,
-    admin=Depends(get_admin),
+    staff=Depends(get_staff),
     db: Session = Depends(get_db),
 ):
-    """Ручное временное отстранение исполнителя от заказов."""
+    """Ручное временное отстранение исполнителя от заказов.
+
+    Доступ: администратор И оператор — панель отстранения открыта им обоим."""
     executor = get_executor(db, executor_id)
     now = datetime.utcnow()
+    who = staff.get("login") or staff.get("role") or "admin"
     suspension = ExecutorSuspension(
         executor_id=executor_id,
         starts_at=now,
         ends_at=now + timedelta(hours=max(1, min(int(data.hours or 24), 24 * 30))),
-        reason=(data.reason or "").strip() or "Отстранение администратором",
+        reason=(data.reason or "").strip() or f"Отстранение ({who})",
         source="admin",
-        created_by="admin",
+        created_by=who,
     )
     db.add(suspension)
     executor.is_online = False
@@ -1409,19 +1412,42 @@ def admin_suspend_executor(
 def admin_revoke_suspension(
     executor_id: int,
     suspension_id: int,
-    admin=Depends(get_admin),
+    staff=Depends(get_staff),
     db: Session = Depends(get_db),
 ):
-    """Досрочное снятие отстранения."""
+    """Досрочное снятие отстранения (разблокировка).
+
+    Доступ: администратор И оператор — снимать отстранение может тот,
+    кто отвечает за диспетчерскую, не только администратор."""
     suspension = db.query(ExecutorSuspension).filter(
         ExecutorSuspension.id == suspension_id,
         ExecutorSuspension.executor_id == executor_id,
     ).first()
     if not suspension:
         raise HTTPException(404, "Отстранение не найдено")
+
+    was_active = (
+        not suspension.revoked_at
+        and suspension.ends_at
+        and suspension.ends_at > datetime.utcnow()
+    )
     suspension.revoked_at = datetime.utcnow()
-    suspension.revoked_by = "admin"
+    suspension.revoked_by = staff.get("login") or staff.get("role") or "admin"
     db.commit()
+
+    # Исполнитель узнаёт о разблокировке — иначе он мог просто молча
+    # не брать заказы, не понимая, что отстранение уже снято
+    if was_active:
+        executor = db.query(Executor).filter(Executor.id == executor_id).first()
+        if executor:
+            db.add(Notification(
+                user_max_id=str(executor.max_id),
+                title="Отстранение снято",
+                body="Отстранение от заказов снято досрочно — вы снова можете принимать заказы.",
+                category="quality",
+            ))
+            db.commit()
+
     return {"ok": True}
 
 
@@ -1537,14 +1563,27 @@ def earnings(
 class StatusIn(BaseModel):
     status: str
 
-# Смена статуса верификации — только для администратора.
+# Смена статуса верификации — администратор И оператор (get_staff).
+# Ровно этот статус решает, заблокирован ли исполнитель: пул заказов
+# отдаёт только approved, поэтому rejected → approved и есть разблокировка.
 # Раньше здесь был и открытый GET /admin/executors (без авторизации и
 # в неверном формате) — он затенял админ-роут из main.py; удалён.
 @router.put("/admin/executors/{executor_id}/status")
-def set_status(executor_id: int, data: StatusIn, admin=Depends(get_admin), db: Session = Depends(get_db)):
+def set_status(executor_id: int, data: StatusIn, staff=Depends(get_staff), db: Session = Depends(get_db)):
     if data.status not in ["pending", "approved", "rejected"]:
         raise HTTPException(400, "Недопустимый статус")
     executor = get_executor(db, executor_id)
+    was = executor.status
     executor.status = data.status
+
+    # Разблокировка (rejected/pending → approved): исполнитель узнаёт,
+    # что снова в работе — иначе он мог молча ждать заказы вхолостую
+    if was != "approved" and data.status == "approved":
+        db.add(Notification(
+            user_max_id=str(executor.max_id),
+            title="Профиль разблокирован",
+            body="Верификация подтверждена — вы снова можете принимать заказы.",
+            category="quality",
+        ))
     db.commit()
     return {"id": executor.id, "status": executor.status}
