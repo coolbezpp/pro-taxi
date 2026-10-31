@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#17181c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- PWA: страница ставится как отдельное приложение «Про GPS»
+     (manifest + service worker) — миниапп предлагает установку,
+     а кнопка «Включить GPS» открывает установленное приложение -->
+<link rel="manifest" href="/executor/manifest.json">
+<link rel="icon" type="image/png" href="/executor/icon-192.png">
+<link rel="apple-touch-icon" href="/executor/icon-192.png">
 <title>GPS-трекинг — «Про»</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -114,6 +123,14 @@
   // автовозврат после первого отправленного места ведут именно туда
   var APP_LINK = "https://max.ru/se14320724_1_bot?startapp";
   var autoReturned = false;
+  // Установленное PWA-приложение (standalone): после первого отправленного
+  // места НЕ уводим водителя обратно в бота — приложение само продолжает
+  // слать координаты, пока его не остановят
+  var standalone = false;
+  try {
+    standalone = window.matchMedia("(display-mode: standalone)").matches
+      || window.navigator.standalone === true;
+  } catch (e) {}
 
   function token() { try { return localStorage.getItem(LS_TOKEN); } catch (e) { return null; } }
   function execInfo() {
@@ -205,11 +222,16 @@
       trackErr.textContent = "";
       // Первое место дошло — возвращаем водителя в миниапп: дальше он
       // работает там, а вкладка продолжает слать координаты, пока система
-      // держит её в фоне (Android) или до перехода в «сон» (iOS)
+      // держит её в фоне (Android) или до перехода в «сон» (iOS).
+      // В установленном приложении этого не делаем — оно работает само.
       if (sentCount === 1 && !autoReturned) {
         autoReturned = true;
-        setState("live", "Трекинг включён — открываю «Про»…");
-        setTimeout(function () { location.href = APP_LINK; }, 2500);
+        if (standalone) {
+          setState("live", "Трекинг включён — приложение работает");
+        } else {
+          setState("live", "Трекинг включён — открываю «Про»…");
+          setTimeout(function () { location.href = APP_LINK; }, 2500);
+        }
       }
     }).catch(function () {
       setState("wait", "Нет связи — повторю");
@@ -272,14 +294,24 @@
   stopBtn.addEventListener("click", function () { stopTracking(true); });
 
   // --- старт: токен в localStorage или код в ссылке --------------------------
-  // Код приходит в хэше (#code=XXXX-XXXX), чтобы он не утекал в логи сервера
-  var m = /code=([A-Za-z0-9-]{6,20})/.exec(location.hash || "");
+  // Код приходит в хэше (#code=XXXX-XXXX) — он не утекает в логи сервера, —
+  // либо в query (?code=): так установленное PWA-приложение открывается
+  // по кнопке «Включить GPS» из миниаппа и сразу стартует трекинг
+  var m = /code=([A-Za-z0-9-]{6,20})/.exec(location.hash || "")
+       || /code=([A-Za-z0-9-]{6,20})/.exec(location.search || "");
   if (m) {
     history.replaceState(null, "", location.pathname);
     login(m[1].toUpperCase());
   } else if (token() && execInfo().id) {
     // Страницу открывали раньше — трекинг возобновляется сам
     startTracking();
+  }
+
+  // Service worker: страница становится устанавливаемым приложением
+  // «Про GPS» (офлайн-оболочка + иконка на экране телефона)
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/executor/sw.js", { scope: "/executor/" })
+      .catch(function () {});
   }
 })();
 </script>

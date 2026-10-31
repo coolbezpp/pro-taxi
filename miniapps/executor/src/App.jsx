@@ -2394,6 +2394,60 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me && me.id, online]);
 
+  // --- PWA «Про GPS»: установка и запуск отдельного приложения -----------------
+  // При первом запуске миниаппа Chrome (системный браузер) предлагает
+  // установить страницу трекинга как приложение (manifest + service worker).
+  // После установки кнопка «Включить GPS» запускает УСТАНОВЛЕННОЕ приложение
+  // со свежим одноразовым кодом — оно само шлёт геолокацию на сервер.
+  const [installEvt, setInstallEvt] = useState(null); // событие beforeinstallprompt
+  const [pwaInstalled, setPwaInstalled] = useState(false);
+  useEffect(() => {
+    const onPrompt = e => {
+      e.preventDefault();   // показываем своё предложение вместо системного
+      setInstallEvt(e);
+    };
+    const onInstalled = () => {
+      setPwaInstalled(true);
+      setInstallEvt(null);
+      try { localStorage.setItem("pro_gps_installed", "1"); } catch (err) {}
+    };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    try {
+      if (localStorage.getItem("pro_gps_installed") === "1"
+        || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)) {
+        setPwaInstalled(true);
+      }
+    } catch (err) { /* приватный режим — просто не предлагаем */ }
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const installPwa = async () => {
+    const evt = installEvt;
+    setInstallEvt(null);
+    if (!evt) return;
+    try {
+      evt.prompt();
+      const choice = await evt.userChoice;
+      if (choice && choice.outcome === "accepted") {
+        setPwaInstalled(true);
+        try { localStorage.setItem("pro_gps_installed", "1"); } catch (err) {}
+      }
+    } catch (err) { /* пользователь закрыл системный диалог */ }
+  };
+
+  const isPwaInstalled = () => {
+    try {
+      if (localStorage.getItem("pro_gps_installed") === "1") return true;
+    } catch (err) {}
+    try {
+      return !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+    } catch (err) { return false; }
+  };
+
   // Кнопка «Включить GPS»: сначала тихо пробуем вебвью (фон, без браузера).
   // Успех → позиция уже идёт, браузер не нужен. Отказ → одноразовый код и
   // системный браузер как запасной путь.
@@ -2401,7 +2455,27 @@ export default function App() {
     setTrackBusy(true);
     setTrackErr("");
 
-    // 1. Пробуем геолокацию прямо здесь, в вебвью
+    // 1. Установлено отдельное приложение «Про GPS» — запускаем именно его:
+    // код живёт 10 минут, приложение принимает его из ссылки и сразу стартует
+    if (isPwaInstalled()) {
+      try {
+        const res = await api("/executor/tracking-code", { method: "POST" });
+        setTrackCode(res);
+        const url = (res.url || "/executor/track.html") + "?code=" + res.code;
+        try {
+          window.open(url, "_blank");
+        } catch (e) {
+          location.href = url; // вебвью запретила window.open — открываем здесь
+        }
+      } catch (e) {
+        setTrackErr("GPS недоступен — не удалось получить код для приложения");
+      } finally {
+        setTrackBusy(false);
+      }
+      return;
+    }
+
+    // 2. Пробуем геолокацию прямо здесь, в вебвью
     if (navigator.geolocation) {
       try {
         const pos = await new Promise((resolve, reject) => {
@@ -2423,7 +2497,7 @@ export default function App() {
       }
     }
 
-    // 2. Фолбэк: одноразовый код + системный браузер
+    // 3. Фолбэк: одноразовый код + системный браузер
     try {
       const res = await api("/executor/tracking-code", { method: "POST" });
       setTrackCode(res);
@@ -2782,6 +2856,29 @@ export default function App() {
               </button>
             </div>
           </header>
+
+          {/* Первый запуск: предлагаем установить PWA «Про GPS» */}
+          {installEvt && !pwaInstalled && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              margin: "10px 0 0", padding: "11px 13px", borderRadius: 14,
+              background: "rgba(47,123,255,.10)", border: "1px solid rgba(47,123,255,.30)",
+            }}>
+              <span style={{ fontSize: 13, lineHeight: 1.4, color: t.text, flex: 1 }}>
+                <strong>Установите «Про GPS»</strong> — приложение для передачи GPS.
+                Кнопка «Включить GPS» будет открывать его напрямую.
+              </span>
+              <button
+                type="button"
+                onClick={installPwa}
+                style={{
+                  flexShrink: 0, padding: "9px 14px", borderRadius: 999, border: 0,
+                  background: t.accent, color: "#fff", fontWeight: 800, fontSize: 13,
+                  fontFamily: "inherit", cursor: "pointer",
+                }}
+              >Установить</button>
+            </div>
+          )}
 
           {page === "home" && (
             <>

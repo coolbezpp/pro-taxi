@@ -3,8 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#17181c" />
+    <!-- PWA «Про GPS»: манифест подключён и здесь, чтобы при первом запуске
+         миниаппа браузер дал событие beforeinstallprompt (установка
+         отдельного GPS-приложения) -->
+    <link rel="manifest" href="/executor/manifest.json" />
+    <link rel="icon" type="image/png" href="/executor/icon-192.png" />
     <title>Про — Исполнитель</title>
     <script src="https://st.max.ru/js/max-web-app.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/executor/sw.js", { scope: "/executor/" }).catch(function () {});
+        });
+      }
+    </script>
   </head>
   <body>
     
