@@ -22,6 +22,34 @@ STATUS_WARNING = "warning"
 STATUS_BLOCKED = "blocked"
 STATUS_RESTING = "resting"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ВРЕМЕННЫЙ ВЫКЛЮЧАТЕЛЬ КОНТРОЛЯ РАБОЧЕГО ВРЕМЕНИ
+# False — все проверки лимита/отдыха пропускают: заказы принимаются всегда,
+# смены не открываются, не продлеваются и не пишутся в БД.
+# Чтобы вернуть контроль — поставить True. (Задеплоено по просьбе владельца;
+# причина — временно убрать ограничения при тестировании.)
+CONTROL_ENABLED = False
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _control_off() -> bool:
+    return not CONTROL_ENABLED
+
+
+def _unlimited_state() -> dict:
+    """Состояние «лимитов нет»: фронт получает привычный словарь, но всё разрешено."""
+    return {
+        "status": STATUS_OK,
+        "started_at": None,
+        "worked_minutes": 0,
+        "limit_minutes": WORK_LIMIT_MINUTES,
+        "remaining_minutes": WORK_LIMIT_MINUTES,
+        "rest_minutes": REST_MINUTES,
+        "rest_until": None,
+        "can_accept_orders": True,
+        "control_disabled": True,
+    }
+
 
 def _now() -> datetime:
     return datetime.utcnow()
@@ -50,6 +78,8 @@ def _last_session(db, executor_id: int):
 
 def close_idle_session(db, executor_id: int):
     """Закрывает смену, если исполнитель давно не брал заказы."""
+    if _control_off():
+        return None
     session = _open_session(db, executor_id)
     if not session:
         return None
@@ -65,6 +95,8 @@ def close_idle_session(db, executor_id: int):
 
 def work_state(db, executor_id: int) -> dict:
     """Текущее состояние рабочего времени исполнителя."""
+    if _control_off():
+        return _unlimited_state()
     now = _now()
     close_idle_session(db, executor_id)
 
@@ -133,6 +165,8 @@ def work_state(db, executor_id: int) -> dict:
 
 def start_session(db, executor_id: int) -> dict:
     """Открывает смену при принятии первого заказа."""
+    if _control_off():
+        return _unlimited_state()
     state = work_state(db, executor_id)
     if state["status"] == STATUS_BLOCKED:
         return state
@@ -156,6 +190,8 @@ def start_session(db, executor_id: int) -> dict:
 
 def touch_session(db, executor_id: int) -> None:
     """Продлевает активность смены (принят/начат/завершён заказ)."""
+    if _control_off():
+        return
     session = _open_session(db, executor_id)
     if session:
         session.last_activity_at = _now()
@@ -164,6 +200,10 @@ def touch_session(db, executor_id: int) -> None:
 
 def stop_session(db, executor_id: int) -> dict:
     """Завершает смену: дальше — отдых 6 часов."""
+    if _control_off():
+        # Смену не закрываем: при обратном включении контроля никто не уйдёт
+        # в6-часовой отдых из-за «остановки» во время паузы
+        return _unlimited_state()
     session = _open_session(db, executor_id)
     now = _now()
     if session:
@@ -175,6 +215,8 @@ def stop_session(db, executor_id: int) -> dict:
 
 def should_warn(db, executor_id: int) -> bool:
     """True, если пора предупредить о скорой блокировке (и ещё не предупреждали)."""
+    if _control_off():
+        return False
     session = _open_session(db, executor_id)
     if not session or session.warned_at:
         return False
@@ -183,6 +225,8 @@ def should_warn(db, executor_id: int) -> bool:
 
 
 def mark_warned(db, executor_id: int) -> None:
+    if _control_off():
+        return
     session = _open_session(db, executor_id)
     if session and not session.warned_at:
         session.warned_at = _now()

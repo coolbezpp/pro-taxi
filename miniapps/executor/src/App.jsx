@@ -2401,6 +2401,7 @@ export default function App() {
   // со свежим одноразовым кодом — оно само шлёт геолокацию на сервер.
   const [installEvt, setInstallEvt] = useState(null); // событие beforeinstallprompt
   const [pwaInstalled, setPwaInstalled] = useState(false);
+  const [offerStatic, setOfferStatic] = useState(false); // ручное предложение (вебвью без prompt)
   useEffect(() => {
     const onPrompt = e => {
       e.preventDefault();   // показываем своё предложение вместо системного
@@ -2409,6 +2410,7 @@ export default function App() {
     const onInstalled = () => {
       setPwaInstalled(true);
       setInstallEvt(null);
+      setOfferStatic(false);
       try { localStorage.setItem("pro_gps_installed", "1"); } catch (err) {}
     };
     window.addEventListener("beforeinstallprompt", onPrompt);
@@ -2419,15 +2421,22 @@ export default function App() {
         setPwaInstalled(true);
       }
     } catch (err) { /* приватный режим — просто не предлагаем */ }
+    // Вебвью MAX не всегда отдаёт beforeinstallprompt — тогда через 4 секунды
+    // сами предлагаем установку: кнопка открывает страницу трекинга в браузере,
+    // где её ставят на экран телефона (Chrome: меню → «Установить приложение»,
+    // iPhone: «Поделиться» → «На экран «Домой»»)
+    const tm = setTimeout(() => setOfferStatic(true), 4000);
     return () => {
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
+      clearTimeout(tm);
     };
   }, []);
 
   const installPwa = async () => {
     const evt = installEvt;
     setInstallEvt(null);
+    setOfferStatic(false);
     if (!evt) return;
     try {
       evt.prompt();
@@ -2858,7 +2867,7 @@ export default function App() {
           </header>
 
           {/* Первый запуск: предлагаем установить PWA «Про GPS» */}
-          {installEvt && !pwaInstalled && (
+          {(installEvt || offerStatic) && !pwaInstalled && (
             <div style={{
               display: "flex", alignItems: "center", gap: 10,
               margin: "10px 0 0", padding: "11px 13px", borderRadius: 14,
@@ -2870,13 +2879,30 @@ export default function App() {
               </span>
               <button
                 type="button"
-                onClick={installPwa}
+                onClick={() => {
+                  if (installEvt) { installPwa(); return; }
+                  // Вебвью не дала системный диалог — открываем страницу
+                  // установки в системном браузере
+                  try { window.open("/executor/track.html", "_blank"); } catch (e) {
+                    location.href = "/executor/track.html";
+                  }
+                }}
                 style={{
                   flexShrink: 0, padding: "9px 14px", borderRadius: 999, border: 0,
                   background: t.accent, color: "#fff", fontWeight: 800, fontSize: 13,
                   fontFamily: "inherit", cursor: "pointer",
                 }}
               >Установить</button>
+              <button
+                type="button"
+                aria-label="Скрыть предложение"
+                onClick={() => { setOfferStatic(false); setInstallEvt(null); }}
+                style={{
+                  flexShrink: 0, width: 26, height: 26, borderRadius: "50%", border: 0,
+                  background: "transparent", color: t.sub, fontSize: 16, lineHeight: 1,
+                  cursor: "pointer", padding: 0,
+                }}
+              >×</button>
             </div>
           )}
 
