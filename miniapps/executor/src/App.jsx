@@ -2357,7 +2357,6 @@ export default function App() {
   const [trackCode, setTrackCode] = useState(null);
   const [trackBusy, setTrackBusy] = useState(false);
   const [trackErr, setTrackErr] = useState("");
-  const [gpsActive, setGpsActive] = useState(false); // вебвью отдаёт GPS в фоне
   const gpsWatchRef = useRef(null);
 
   // Фоновый watchPosition: пока исполнитель онлайн, шлём позицию на сервер.
@@ -2373,18 +2372,14 @@ export default function App() {
     try {
       gpsWatchRef.current = navigator.geolocation.watchPosition(
         pos => {
-          setGpsActive(true);
           send(pos.coords.latitude, pos.coords.longitude);
         },
         () => {
-          // вебвью не дала GPS — оставляем фолбэк через браузер
-          setGpsActive(false);
+          // вебвью не дала GPS — остаётся фолбэк через приложение/браузер
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
       );
-    } catch (e) {
-      setGpsActive(false);
-    }
+    } catch (e) { /* watchPosition не поддерживается */ }
     return () => {
       if (gpsWatchRef.current != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(gpsWatchRef.current);
@@ -2393,6 +2388,29 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me && me.id, online]);
+
+  // --- Android: нативное приложение «Про GPS» (APK) --------------------------
+  // На Android фон в вебвью усыпляется, поэтому геопозицию передаёт
+  // отдельное приложение с foreground-сервисом. Миниапп при первом запуске
+  // предлагает скачать APK, а кнопка «Включить GPS» открывает установленное
+  // приложение по deep link procityservice-gps://track?code=… . iPhone
+  // остаётся на PWA — APK для него не установить.
+  const isAndroid = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent || "");
+  const APK_URL = "/executor/app/pro-gps.apk";
+  const [apkOfferHidden, setApkOfferHidden] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("pro_gps_apk_off") === "1") setApkOfferHidden(true);
+    } catch (err) { /* приватный режим */ }
+  }, []);
+  const hideApkOffer = () => {
+    setApkOfferHidden(true);
+    try { localStorage.setItem("pro_gps_apk_off", "1"); } catch (err) {}
+  };
+  const downloadApk = () => {
+    hideApkOffer();
+    try { window.open(APK_URL, "_blank"); } catch (e) { location.href = APK_URL; }
+  };
 
   // --- PWA «Про GPS»: установка и запуск отдельного приложения -----------------
   // При первом запуске миниаппа Chrome (системный браузер) предлагает
@@ -2464,6 +2482,33 @@ export default function App() {
     setTrackBusy(true);
     setTrackErr("");
 
+    // Android: одноразовый код уходит в deep link нативного приложения —
+    // оно само меняет его на токен и шлёт координаты в фоне. Если приложение
+    // не установлено (или вебвью не отдала ссылку системе), окно не уйдёт
+    // на передний план — тогда показываем модалку с кнопкой скачивания APK.
+    if (isAndroid) {
+      try {
+        const res = await api("/executor/tracking-code", { method: "POST" });
+        let opened = false;
+        const onVis = () => { if (document.hidden) opened = true; };
+        document.addEventListener("visibilitychange", onVis);
+        location.href = "procityservice-gps://track?code=" + res.code;
+        await new Promise(r => setTimeout(r, 1500));
+        document.removeEventListener("visibilitychange", onVis);
+        if (opened) {
+          setTrackBusy(false);
+          return;
+        }
+        // Приложение не открылось — модалка: код и кнопка скачивания APK
+        setTrackCode(res);
+      } catch (e) {
+        setTrackErr("GPS недоступен — не удалось получить код для приложения");
+      } finally {
+        setTrackBusy(false);
+      }
+      return;
+    }
+
     // 1. Установлено отдельное приложение «Про GPS» — запускаем именно его:
     // код живёт 10 минут, приложение принимает его из ссылки и сразу стартует
     if (isPwaInstalled()) {
@@ -2498,7 +2543,6 @@ export default function App() {
           method: "POST",
           body: { lat: pos.coords.latitude, lon: pos.coords.longitude },
         });
-        setGpsActive(true);
         setTrackBusy(false);
         return;
       } catch (e) {
@@ -2533,7 +2577,6 @@ export default function App() {
     geoOnceRef.current = true;
     navigator.geolocation.getCurrentPosition(
       async pos => {
-        setGpsActive(true);
         try {
           await api(`/executors/${me.id}/position`, {
             method: "POST",
@@ -2543,9 +2586,7 @@ export default function App() {
           // сеть недоступна — попробует фоновый watch
         }
       },
-      () => {
-        setGpsActive(false);
-      },
+      () => { /* нет геолокации — точка придёт от фонового трекинга */ },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
     );
   }, [me && me.id]);
@@ -2847,15 +2888,6 @@ export default function App() {
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {/* Статус GPS: в фоне (вебвью) или только через браузер */}
-              <span style={{
-                fontSize: 10.5, fontWeight: 800, padding: "5px 9px", borderRadius: 999,
-                background: gpsActive ? "rgba(23,178,106,.12)" : "rgba(217,43,69,.10)",
-                color: gpsActive ? "#177e46" : "#d92b45",
-                border: `1px solid ${gpsActive ? "rgba(23,178,106,.35)" : "rgba(217,43,69,.30)"}`,
-              }}>
-                GPS {gpsActive ? "в фоне" : "нет"}
-              </span>
               <button
                 onClick={toggleOnline}
                 style={{ ...s.onlineBtn(online), opacity: work && !work.can_accept_orders ? 0.55 : 1 }}
@@ -2866,20 +2898,30 @@ export default function App() {
             </div>
           </header>
 
-          {/* Первый запуск: предлагаем установить PWA «Про GPS» */}
-          {(installEvt || offerStatic) && !pwaInstalled && (
+          {/* Первый запуск: Android — установка APK «Про GPS», iPhone — PWA */}
+          {(installEvt || offerStatic) && !pwaInstalled && !apkOfferHidden && (
             <div style={{
               display: "flex", alignItems: "center", gap: 10,
               margin: "10px 0 0", padding: "11px 13px", borderRadius: 14,
               background: "rgba(47,123,255,.10)", border: "1px solid rgba(47,123,255,.30)",
             }}>
               <span style={{ fontSize: 13, lineHeight: 1.4, color: t.text, flex: 1 }}>
-                <strong>Установите «Про GPS»</strong> — приложение для передачи GPS.
-                Кнопка «Включить GPS» будет открывать его напрямую.
+                {isAndroid ? (
+                  <>
+                    <strong>Установите «Про GPS»</strong> — приложение передаёт
+                    геопозицию в фоне, пока миниапп закрыт.
+                  </>
+                ) : (
+                  <>
+                    <strong>Установите «Про GPS»</strong> — приложение для передачи GPS.
+                    Кнопка «Включить GPS» будет открывать его напрямую.
+                  </>
+                )}
               </span>
               <button
                 type="button"
                 onClick={() => {
+                  if (isAndroid) { downloadApk(); return; }
                   if (installEvt) { installPwa(); return; }
                   // Вебвью не дала системный диалог — открываем страницу
                   // установки в системном браузере
@@ -2896,7 +2938,11 @@ export default function App() {
               <button
                 type="button"
                 aria-label="Скрыть предложение"
-                onClick={() => { setOfferStatic(false); setInstallEvt(null); }}
+                onClick={() => {
+                  setOfferStatic(false);
+                  setInstallEvt(null);
+                  if (isAndroid) hideApkOffer();
+                }}
                 style={{
                   flexShrink: 0, width: 26, height: 26, borderRadius: "50%", border: 0,
                   background: "transparent", color: t.sub, fontSize: 16, lineHeight: 1,
@@ -3254,15 +3300,28 @@ export default function App() {
                   background: t.card, border: `1px solid ${t.border}`,
                 }}
               >
-                <h3 style={{ margin: "0 0 6px", fontSize: 17 }}>Код для GPS-трекинга</h3>
-                <p style={{ margin: "0 0 14px", fontSize: 13, color: t.sub, lineHeight: 1.45 }}>
-                  Страница откроется в браузере телефона — там GPS работает.
-                  Координаты уйдут на карту диспетчера. Код одноразовый, живёт 10 минут.
-                </p>
-                <div style={{
-                  textAlign: "center", fontSize: 29, fontWeight: 900, letterSpacing: 5,
-                  padding: "14px 0", borderRadius: 14, background: t.accentSoft, color: t.accent,
-                }}>{trackCode.code}</div>
+                {isAndroid ? (
+                  <>
+                    <h3 style={{ margin: "0 0 6px", fontSize: 17 }}>Установите «Про GPS»</h3>
+                    <p style={{ margin: "0 0 14px", fontSize: 13, color: t.sub, lineHeight: 1.45 }}>
+                      Приложение не открылось. Установите «Про GPS» — после этого
+                      кнопка «Включить GPS» запустит его напрямую, и координаты
+                      пойдут на карту диспетчера в фоне.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h3 style={{ margin: "0 0 6px", fontSize: 17 }}>Код для GPS-трекинга</h3>
+                    <p style={{ margin: "0 0 14px", fontSize: 13, color: t.sub, lineHeight: 1.45 }}>
+                      Страница откроется в браузере телефона — там GPS работает.
+                      Координаты уйдут на карту диспетчера. Код одноразовый, живёт 10 минут.
+                    </p>
+                    <div style={{
+                      textAlign: "center", fontSize: 29, fontWeight: 900, letterSpacing: 5,
+                      padding: "14px 0", borderRadius: 14, background: t.accentSoft, color: t.accent,
+                    }}>{trackCode.code}</div>
+                  </>
+                )}
                 {trackErr && (
                   <p style={{ margin: "10px 0 0", fontSize: 13, color: t.danger, fontWeight: 700 }}>
                     {trackErr}
@@ -3270,13 +3329,16 @@ export default function App() {
                 )}
                 <button
                   type="button"
-                  onClick={() => window.open(trackCode.url + "#code=" + trackCode.code, "_blank")}
+                  onClick={() => {
+                    if (isAndroid) { downloadApk(); return; }
+                    window.open(trackCode.url + "#code=" + trackCode.code, "_blank");
+                  }}
                   style={{
                     width: "100%", marginTop: 12, padding: 13, border: 0, borderRadius: 12,
                     background: t.accent, color: "#fff", fontSize: 15, fontWeight: 800,
                     fontFamily: "inherit", cursor: "pointer",
                   }}
-                >Открыть страницу трекинга</button>
+                >{isAndroid ? "Скачать «Про GPS»" : "Открыть страницу трекинга"}</button>
                 <button
                   type="button"
                   onClick={() => setTrackCode(null)}
