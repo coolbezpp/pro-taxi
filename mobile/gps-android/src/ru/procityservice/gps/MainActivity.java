@@ -92,6 +92,17 @@ public class MainActivity extends Activity implements TrackService.Listener {
     private void handleIntent(Intent intent) {
         Uri data = intent != null ? intent.getData() : null;
         String code = data != null ? data.getQueryParameter("code") : null;
+        String action = data != null ? data.getQueryParameter("action") : null;
+        
+        // Deep link: action=stop — останавливаем трекинг и возвращаемся в миниапп
+        if ("stop".equals(action)) {
+            prefs().edit().putBoolean("wanted", false).apply();
+            stopService(new Intent(this, TrackService.class));
+            TrackService.lastError = "";
+            refreshUi();
+            return;
+        }
+        
         if (code != null && !code.isEmpty()) {
             if (missingLocation()) {
                 pendingAfterPerms = () -> exchangeCode(code);

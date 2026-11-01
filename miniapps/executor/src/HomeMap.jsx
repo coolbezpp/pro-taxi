@@ -29,6 +29,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   const sentRef = useRef(0);   // когда последний раз шли позицию на сервер
   const watchIdRef = useRef(null); // id watchPosition (чтобы не дублировать)
   const [geoBlocked, setGeoBlocked] = useState(false); // геолокация запрещена
+  const geoNoticeTimerRef = useRef(null); // автоскрытие баннера «геолокация запрещена» (10 с)
   const [attrOpen, setAttrOpen] = useState(false);     // раскрытая строка © OSM
   const [noPos, setNoPos] = useState(false);           // GPS не смог дать координаты
   const [noWebgl, setNoWebgl] = useState(false);       // вебвью не дало WebGL2
@@ -74,6 +75,22 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
     resizeHalo();
   };
 
+  // Баннер «MAX не даёт доступ к геолокации в приложении»: появляется при
+  // каждом входе в миниапп (при старте GPS-watch / проверки разрешения) и
+  // сам исчезает через 10 секунд, если доступ за это время не появился.
+  const showGeoBlocked = () => {
+    setGeoBlocked(true);
+    if (geoNoticeTimerRef.current) clearTimeout(geoNoticeTimerRef.current);
+    geoNoticeTimerRef.current = setTimeout(() => {
+      setGeoBlocked(false);
+      geoNoticeTimerRef.current = null;
+    }, 10000);
+  };
+  const clearGeoBlocked = () => {
+    if (geoNoticeTimerRef.current) { clearTimeout(geoNoticeTimerRef.current); geoNoticeTimerRef.current = null; }
+    setGeoBlocked(false);
+  };
+
   // GPS-watch: запрос геолокации запускается при каждом открытии миниаппа
   // (см. useEffect ниже) и повторяется кнопками. Первый fix подлетает к
   // реальной точке
@@ -85,7 +102,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         const lon = pos.coords.longitude;
         const lat = pos.coords.latitude;
         ensureMarker(lon, lat, pos.coords.accuracy);
-        setGeoBlocked(false);
+        clearGeoBlocked();
         setNoPos(false);
         if (!gpsRef.current) {
           gpsRef.current = true;
@@ -101,7 +118,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         // code 1 — доступ к геолокации запрещён (в MAX это отказывает
         // само приложение, настройки телефона не всегда помогают)
         if (err && err.code === 1) {
-          setGeoBlocked(true);
+          showGeoBlocked();
         } else {
           // нет спутников / таймаут — покажем баннер с повтором
           setNoPos(true);
@@ -172,8 +189,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       try {
         if (navigator.permissions?.query) {
           navigator.permissions.query({ name: "geolocation" }).then((st) => {
-            setGeoBlocked(st.state === "denied");
-            st.onchange = () => setGeoBlocked(st.state === "denied");
+            if (st.state === "denied") showGeoBlocked();
+            st.onchange = () => { if (st.state === "denied") showGeoBlocked(); else clearGeoBlocked(); };
           }).catch(() => {});
         }
       } catch (e) {}
@@ -193,6 +210,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
       markerRef.current = null;
       haloRef.current = null;
       gpsRef.current = false;
+      if (geoNoticeTimerRef.current) { clearTimeout(geoNoticeTimerRef.current); geoNoticeTimerRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

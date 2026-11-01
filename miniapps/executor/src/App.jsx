@@ -2357,6 +2357,7 @@ export default function App() {
   const [trackCode, setTrackCode] = useState(null);
   const [trackBusy, setTrackBusy] = useState(false);
   const [trackErr, setTrackErr] = useState("");
+  const [gpsOn, setGpsOn] = useState(false); // GPS-трекинг включён (приложение/браузер шлёт позицию)
   const gpsWatchRef = useRef(null);
   const lastPosSentRef = useRef(0); // троттлинг отправки: не чаще раза в 5 секунд
 
@@ -2482,6 +2483,13 @@ export default function App() {
     } catch (err) { return false; }
   };
 
+  // Останавливаем передачу GPS через приложение «Про GPS» (deep link с
+  // action=stop — в самом приложении трекинг останавливается).
+  const stopGpsTrack = () => {
+    setGpsOn(false);
+    try { location.href = "procityservice-gps://track?action=stop"; } catch (e) { /* noop */ }
+  };
+
   // Кнопка «Включить GPS»: сначала тихо пробуем вебвью (фон, без браузера).
   // Успех → позиция уже идёт, браузер не нужен. Отказ → одноразовый код и
   // системный браузер как запасной путь.
@@ -2503,6 +2511,10 @@ export default function App() {
         await new Promise(r => setTimeout(r, 1500));
         document.removeEventListener("visibilitychange", onVis);
         if (opened) {
+          setGpsOn(true);
+          // Передача GPS заработала в приложении «Про GPS» — возвращаем
+          // пользователя в миниапп исполнителя (главный экран с картой).
+          try { resetPage("home"); } catch (e) { /* noop */ }
           setTrackBusy(false);
           return;
         }
@@ -2522,6 +2534,7 @@ export default function App() {
       try {
         const res = await api("/executor/tracking-code", { method: "POST" });
         setTrackCode(res);
+        setGpsOn(true); // передача GPS запущена — браузер/приложение начнут слать позицию
         const url = (res.url || "/executor/track.html") + "?code=" + res.code;
         try {
           window.open(url, "_blank");
@@ -2550,6 +2563,7 @@ export default function App() {
           method: "POST",
           body: { lat: pos.coords.latitude, lon: pos.coords.longitude },
         });
+        setGpsOn(true);
         setTrackBusy(false);
         return;
       } catch (e) {
@@ -2561,6 +2575,7 @@ export default function App() {
     try {
       const res = await api("/executor/tracking-code", { method: "POST" });
       setTrackCode(res);
+      setGpsOn(true); // передача GPS запущена — браузер начнёт слать позицию
       try {
         window.open(res.url + "#code=" + res.code, "_blank");
       } catch (e) {
@@ -2885,22 +2900,16 @@ export default function App() {
         </>
       ) : (
         <>
-          {/* Топбар: бренд + большой тумблер линии (Grab style) */}
+          {/* Топбар: слева — кнопка GPS, справа — тумблер линии (Grab style) */}
           <header style={s.topbar}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-              <span style={s.logoDot}>П</span>
-              <div>
-                <div style={{ fontWeight: 900, fontSize: 15, lineHeight: 1, color: t.text }}>Про</div>
-                <div style={{ fontSize: 9.5, fontWeight: 750, color: t.sub, marginTop: 2 }}>Исполнитель</div>
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {/* Кнопка «Включить GPS» в шапке — всегда под рукой, на любой
-                  вкладке. Запускает нативное приложение «Про GPS» (Android)
-                  или страницу трекинга (iPhone) */}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              {/* Кнопка «Включить GPS» / «Отключить GPS» в шапке — единственное
+                  в левом углу (логотип и надписи убраны). Когда передача GPS
+                  работает — статус «Отключить GPS», тап уводит в приложение
+                  «Про GPS». */}
               <button
                 type="button"
-                onClick={enableTrackBrowser}
+                onClick={() => (gpsOn ? stopGpsTrack() : enableTrackBrowser())}
                 disabled={trackBusy}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
@@ -2917,8 +2926,10 @@ export default function App() {
                   <path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11z" />
                   <circle cx="12" cy="10" r="2.6" />
                 </svg>
-                {trackBusy ? "Открываю…" : "Включить GPS"}
+                {gpsOn ? "Отключить GPS" : trackBusy ? "Открываю…" : "Включить GPS"}
               </button>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button
                 onClick={toggleOnline}
                 style={{ ...s.onlineBtn(online), opacity: work && !work.can_accept_orders ? 0.55 : 1 }}
