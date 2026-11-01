@@ -112,86 +112,12 @@ export function ProfileBalance() {
   );
 }
 
-// Карточка оценки последнего завершённого заказа.
-// Показывается, пока поездка не оценена второй стороной.
-function RatingCard({ rate, busyRate, onRate, t }) {
-  // Негатив в течение часа после завершения можно передумать на лайк;
-  // положительная оценка финальная — кнопки дислайка в этом режиме нет.
-  const changeMode = rate.rated_value === "dislike";
-  return (
-    <div style={{
-      padding: 16,
-      borderRadius: 18,
-      background: t.card,
-      border: `2px solid ${t.accent}`,
-      color: t.text,
-      boxShadow: t.shadow,
-    }}>
-      <strong>Заказ №{rate.id} выполнен</strong>
-      <p style={{ margin: "6px 0 0", color: t.sub, fontSize: 13 }}>
-        {rate.from_address} → {rate.to_address}
-      </p>
-      <p style={{ margin: "10px 0 8px", fontWeight: 800, color: t.text }}>
-        {changeMode ? "Изменить оценку?" : "Как всё прошло?"}
-      </p>
-
-      <div style={{ display: "flex", gap: 10 }}>
-        <button
-          onClick={() => onRate("like")}
-          disabled={busyRate}
-          style={{
-            flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 8, padding: 12, borderRadius: 12, border: 0, cursor: "pointer",
-            background: t.successSoft, color: t.success, fontWeight: 800,
-            opacity: busyRate ? 0.6 : 1,
-          }}
-        >
-          <MiniIcon path={LIKE_PATH} /> {changeMode ? "Всё хорошо" : "Понравилось"}
-        </button>
-        {!changeMode && (
-          <button
-            onClick={() => onRate("dislike")}
-            disabled={busyRate}
-            style={{
-              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-              gap: 8, padding: 12, borderRadius: 12, border: 0, cursor: "pointer",
-              background: t.dangerSoft, color: t.danger, fontWeight: 800,
-              opacity: busyRate ? 0.6 : 1,
-            }}
-          >
-            <MiniIcon path={DISLIKE_PATH} /> Не понравилось
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function ActiveOrderCard({ fallback = null }) {
-  const [summary, reload] = useSummary();
+  const [summary] = useSummary();
   const { t } = useTheme();
   const order = summary?.active_order;
-  const completed = summary?.last_completed;
-  const rateOpen = completed && !completed.rated;
-  const [busy, setBusy] = useState(false);
-  const [busyRate, setBusyRate] = useState(false);
 
-  if (!order && !rateOpen) return fallback ?? null;
-
-  async function sendRating(value) {
-    setBusyRate(true);
-    try {
-      await api("/ratings", {
-        method: "POST",
-        body: { order_id: completed.id, value },
-      });
-      await reload();
-    } catch (e) {
-      alert(e.message || "Не удалось отправить оценку");
-    } finally {
-      setBusyRate(false);
-    }
-  }
+  if (!order) return fallback ?? null;
 
   async function shareTrip() {
     const status = STATUS_NAMES[order.status] || order.status;
@@ -228,10 +154,6 @@ export function ActiveOrderCard({ fallback = null }) {
       gap: 8,
       zIndex: 20,
     }}>
-      {rateOpen && (
-        <RatingCard rate={completed} busyRate={busyRate} onRate={sendRating} t={t} />
-      )}
-
       {order && (
         <div style={{
           padding: 16,
