@@ -202,7 +202,7 @@
   // --- отправка позиции ------------------------------------------------------
   function sendPosition(pos) {
     var now = Date.now();
-    if (now - lastSendAt < 10000) return;   // не чаще раза в 10 секунд
+    if (now - lastSendAt < 5000) return;   // не чаще раза в 5 секунд (требование: обновление каждые 5–10 сек)
     lastSendAt = now;
     var info = execInfo();
     fetch(API + "/executors/" + info.id + "/position", {

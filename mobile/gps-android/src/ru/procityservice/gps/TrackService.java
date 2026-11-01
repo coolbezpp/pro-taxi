@@ -31,14 +31,14 @@ import java.util.Locale;
  * слушает GPS (сеть — запасной источник) и шлёт координаты на сервер «Про»
  * тем же API, что и PWA-страница трекинга:
  *   POST /api/executors/{id}/position  {"lat":…, "lon":…}  Bearer-токен,
- * не чаще одного раза в 10 секунд. 401 от сервера означает истёкшую
+ * не чаще одного раза в 5 секунд (частота GPS — раз в 4 секунды). 401 от сервера означает истёкшую
  * сессию — сервис гаснет и просит запросить новый код в миниаппе.
  */
 public class TrackService extends Service {
     public static final String API = "https://procityservice.ru/api";
     private static final String CHANNEL_ID = "gps";
     private static final int NOTIF_ID = 1;
-    private static final long SEND_INTERVAL_MS = 10_000;
+    private static final long SEND_INTERVAL_MS = 5_000;
 
     public static volatile boolean running = false;
     public static volatile double lastLat = 0;
@@ -149,9 +149,9 @@ public class TrackService extends Service {
                 return;
             }
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,
-                5000, 0, locListener, Looper.getMainLooper());
+                4000, 0, locListener, Looper.getMainLooper());
             lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,
-                15000, 0, locListener, Looper.getMainLooper());
+                10000, 0, locListener, Looper.getMainLooper());
         } catch (Exception e) {
             lastError = "Ошибка геолокации";
         }

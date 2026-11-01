@@ -2358,12 +2358,19 @@ export default function App() {
   const [trackBusy, setTrackBusy] = useState(false);
   const [trackErr, setTrackErr] = useState("");
   const gpsWatchRef = useRef(null);
+  const lastPosSentRef = useRef(0); // троттлинг отправки: не чаще раза в 5 секунд
 
   // Фоновый watchPosition: пока исполнитель онлайн, шлём позицию на сервер.
   // Запускается автоматически при выходе на линию — без кнопок и браузера.
   useEffect(() => {
     if (!me || !online || !navigator.geolocation) return undefined;
     const send = (lat, lon) => {
+      // Интервал обновления позиции — раз в 5 секунд (у конкурентов
+      // ~2–5 сек): watchPosition шлёт точку чаще, но на сервер уходит
+      // не чаще одного раза в 5 секунд.
+      const now = Date.now();
+      if (now - lastPosSentRef.current < 5000) return;
+      lastPosSentRef.current = now;
       api(`/executors/${me.id}/position`, {
         method: "POST",
         body: { lat, lon },
@@ -2377,7 +2384,7 @@ export default function App() {
         () => {
           // вебвью не дала GPS — остаётся фолбэк через приложение/браузер
         },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 4000 }
       );
     } catch (e) { /* watchPosition не поддерживается */ }
     return () => {
@@ -2888,6 +2895,30 @@ export default function App() {
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Кнопка «Включить GPS» в шапке — всегда под рукой, на любой
+                  вкладке. Запускает нативное приложение «Про GPS» (Android)
+                  или страницу трекинга (iPhone) */}
+              <button
+                type="button"
+                onClick={enableTrackBrowser}
+                disabled={trackBusy}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "10px 11px", borderRadius: 13, border: 0,
+                  cursor: trackBusy ? "default" : "pointer",
+                  background: t.accentSoft, color: t.accent,
+                  fontSize: 12.5, fontWeight: 800, fontFamily: "inherit",
+                  opacity: trackBusy ? 0.6 : 1, whiteSpace: "nowrap",
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2.2"
+                  strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11z" />
+                  <circle cx="12" cy="10" r="2.6" />
+                </svg>
+                {trackBusy ? "Открываю…" : "Включить GPS"}
+              </button>
               <button
                 onClick={toggleOnline}
                 style={{ ...s.onlineBtn(online), opacity: work && !work.can_accept_orders ? 0.55 : 1 }}
@@ -2972,8 +3003,6 @@ export default function App() {
                       : null
                   }
                   onPosition={sendHomePos}
-                  onEnableTrack={enableTrackBrowser}
-                  trackBusy={trackBusy}
                 />
               </React.Suspense>
             </>

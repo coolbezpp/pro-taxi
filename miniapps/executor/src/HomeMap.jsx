@@ -19,7 +19,7 @@ const KKR_CENTER = [38.975, 45.035];
 // (PMTiles Краснодарского края), синяя точка «я здесь» с ореолом точности
 // и кнопка «показать меня». Свежий GPS всегда приоритетнее позиции из
 // профиля — устаревшая серверная точка не «привязывает» карту.
-export default function HomeMap({ t, position = null, full = false, onPosition = null, onEnableTrack = null, trackBusy = false }) {
+export default function HomeMap({ t, position = null, full = false, onPosition = null }) {
   const container = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -228,14 +228,20 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
   }, [position]);
 
   // Кнопка «показать меня»: при живом GPS — подлёт к точке, как в Яндекс
-  // такси. Живого GPS пока нет — пробуем его добыть ещё раз
+  // такси. Живого GPS пока нет — перезапускаем watch (startGeo молча
+  // выходит, если watch уже запущен, и fix бы не пришёл никогда) и всё
+  // равно летим к известной точке: маркер из GPS или из профиля.
   const recenter = () => {
     const map = mapRef.current;
     const marker = markerRef.current;
     if (!map) return;
+    setNoPos(false);
     if (!gpsRef.current) {
+      if (watchIdRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
       startGeo();
-      return;
     }
     if (marker) {
       const c = marker.getLngLat();
@@ -280,23 +286,8 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
         </div>
         <div style={{ fontSize: 12.5, color: t.sub, lineHeight: 1.5, maxWidth: 280 }}>
           Ваше устройство не поддерживает отрисовку карты (WebGL).
-          Заказы и GPS-позиция работают — геопозиция обновляется кнопкой ниже.
+          Заказы и GPS-позиция работают — кнопка «Включить GPS» в шапке.
         </div>
-        {onEnableTrack && (
-          <button
-            type="button"
-            onClick={onEnableTrack}
-            disabled={trackBusy}
-            style={{
-              marginTop: 4, padding: "10px 18px", borderRadius: 12,
-              background: "#2f7bff", color: "#fff", border: "none",
-              fontWeight: 800, fontSize: 13.5, cursor: "pointer",
-              opacity: trackBusy ? 0.6 : 1,
-            }}
-          >
-            {trackBusy ? "Открываю…" : "Включить GPS"}
-          </button>
-        )}
       </div>
     );
   }
@@ -369,19 +360,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
           justifyContent: "center", textAlign: "center",
         }}>
-          <span>MAX не даёт доступ к геолокации в приложении</span>
-          {onEnableTrack && (
-            <button
-              type="button"
-              onClick={onEnableTrack}
-              disabled={trackBusy}
-              style={{
-                border: 0, cursor: trackBusy ? "default" : "pointer", borderRadius: 999,
-                padding: "5px 11px", fontSize: 11, fontWeight: 800,
-                background: "#177e46", color: "#fff", fontFamily: "inherit",
-              }}
-            >{trackBusy ? "Готовлю код…" : "Включить GPS"}</button>
-          )}
+          <span>MAX не даёт доступ к геолокации в приложении — кнопка «Включить GPS» в шапке</span>
         </div>
       )}
       {/* GPS не смог дать координаты (нет спутников / таймаут) */}
@@ -395,19 +374,7 @@ export default function HomeMap({ t, position = null, full = false, onPosition =
           display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
           justifyContent: "center", textAlign: "center",
         }}>
-          <span>Не удалось определить место</span>
-          {onEnableTrack && (
-            <button
-              type="button"
-              onClick={onEnableTrack}
-              disabled={trackBusy}
-              style={{
-                border: 0, cursor: trackBusy ? "default" : "pointer", borderRadius: 999,
-                padding: "5px 11px", fontSize: 11, fontWeight: 800,
-                background: "#177e46", color: "#fff", fontFamily: "inherit",
-              }}
-            >{trackBusy ? "Готовлю код…" : "Включить GPS"}</button>
-          )}
+          <span>Не удалось определить место — кнопка «Включить GPS» в шапке</span>
         </div>
       )}
       <style>{`
