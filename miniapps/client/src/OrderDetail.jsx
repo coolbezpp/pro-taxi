@@ -8,6 +8,7 @@ const STATUS_TEXT = {
   created: "Ищем исполнителя",
   assigned: "Исполнитель назначен",
   accepted: "Исполнитель едет к вам",
+  arrived: "Исполнитель на месте",
   in_progress: "Поездка началась",
   completed: "Заказ выполнен",
   cancelled: "Заказ отменён",
@@ -32,7 +33,7 @@ export default function OrderDetailSheet({ t, orderId, onClose }) {
     }
     load();
     // Активный заказ трекаем живьём, завершённый/отменённый — один раз
-    const active = ["created", "assigned", "accepted", "in_progress"].includes(order?.status);
+    const active = ["created", "assigned", "accepted", "arrived", "in_progress"].includes(order?.status);
     const it = active ? setInterval(load, 5000) : null;
     return () => { alive = false; if (it) clearInterval(it); };
   }, [orderId, order?.status]);

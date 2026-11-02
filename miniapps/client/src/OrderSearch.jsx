@@ -7,6 +7,7 @@ const STATUS_TEXT = {
   created: "Ищем исполнителя",
   assigned: "Исполнитель назначен",
   accepted: "Исполнитель едет к вам",
+  arrived: "Исполнитель на месте",
   in_progress: "Поездка началась",
   completed: "Заказ выполнен",
   cancelled: "Заказ отменён",
@@ -214,7 +215,7 @@ export default function OrderSearch({ s, t, orderId, onBack, onCancel }) {
           </div>
         )}
 
-        {["created", "assigned"].includes(status) && (
+        {["created", "chain_reserved", "assigned", "accepted", "arrived"].includes(status) && (
           <button
             onClick={onCancel}
             style={{

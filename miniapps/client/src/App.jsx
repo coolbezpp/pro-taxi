@@ -263,7 +263,8 @@ const TECH_HELP_SERVICES = [
 const STATUS_RU = {
   created: "Создан",
   assigned: "Назначен исполнитель",
-  accepted: "Исполнитель в пути",
+  accepted: "Исполнитель едет к вам",
+  arrived: "Исполнитель на месте",
   in_progress: "Выполняется",
   completed: "Завершён",
   cancelled: "Отменён",
@@ -1271,7 +1272,7 @@ function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggl
       {orders.map(o => {
         const isCancel = o.status === "cancelled";
         const isDone = o.status === "completed";
-        const isActive = ["created", "assigned", "accepted", "in_progress"].includes(o.status);
+        const isActive = ["created", "assigned", "accepted", "arrived", "in_progress"].includes(o.status);
         return (
           <div
             key={o.id}

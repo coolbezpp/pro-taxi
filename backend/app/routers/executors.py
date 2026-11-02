@@ -17,14 +17,14 @@ from ..models import (
 )
 from ..config import settings
 from ..security import bearer_scheme, create_token, get_admin, get_staff, get_current_executor
-from .. import worktime, rating
+from .. import worktime, rating, order_states, pricing
 from ..services.max_notify import send_max_message
 from ..services import antifraud
 
 router = APIRouter(prefix="/api", tags=["executors"])
 
 ROLES = ["driver", "courier", "cargo", "master", "car_owner", "flat_owner"]
-ACTIVE_STATUSES = ["assigned", "accepted", "in_progress"]
+ACTIVE_STATUSES = list(order_states.ACTIVE_STATUSES)
 
 # Максимальный размер фото, присылаемого исполнителем (data-URL).
 # Приложение сжимает снимок сам (до ~1.5 МБ), лимит — запас на сетевые обрывы.
@@ -591,7 +591,7 @@ def admin_executor_profile(
             "status": executor.status,
             "active_role": executor.active_role,
             "roles": executor_roles(db, executor_id),
-            "balance": round(float(executor.balance or 0), 2),
+            "balance": pricing.rub(executor.balance),
             "rating_likes": int(executor.rating_likes or 0),
             "rating_dislikes": int(executor.rating_dislikes or 0),
             "is_online": bool(executor.is_online),
@@ -603,7 +603,7 @@ def admin_executor_profile(
         "balance_ops": [{
             "id": op.id,
             "type": op.type,
-            "amount": round(float(op.amount or 0), 2),
+            "amount": pricing.rub(op.amount),
             "order_id": op.order_id,
             "comment": op.comment,
             "created_at": op.created_at.isoformat() if op.created_at else None,
@@ -649,11 +649,16 @@ def balance_history(
     executor: Executor = Depends(get_current_executor),
     db: Session = Depends(get_db),
 ):
-    """Статистика по балансу: за последние 7 дней или по неделям выбранного месяца."""
+    """Статистика по балансу: за последние 7 дней или по неделям выбранного месяца.
+
+    Оплата заказов наличными: в «заработке» — суммы поездок (что клиент
+    заплатил водителю), комиссия видна отдельными списаниями в истории.
+    """
     _require_same(executor, executor_id)
     now = datetime.utcnow()
 
-    # Заработок — по завершённым заказам (выплата = сумма − комиссия)
+    # Заработок — по завершённым заказам (наличные; комиссия — отдельным
+    # списанием с баланса, в график не входит)
     orders = db.query(Order).filter(
         Order.executor_id == executor_id,
         Order.status == "completed",
@@ -662,14 +667,14 @@ def balance_history(
     earned_by_day_all = {}
     months_with_data = set()
     for o in orders:
-        payout = round((o.total_price or 0) - (o.commission_amount or 0), 2)
+        cash = pricing.rub(o.total_price or 0)
         created = o.created_at or o.id
         day = created.date() if hasattr(created, "date") else None
         if day is None:
             continue
         months_with_data.add(f"{day.year:04d}-{day.month:02d}")
         key = day.isoformat()
-        earned_by_day_all[key] = round(earned_by_day_all.get(key, 0.0) + payout, 2)
+        earned_by_day_all[key] = earned_by_day_all.get(key, 0.0) + cash
 
     available = _available_months(now)
 
@@ -696,30 +701,31 @@ def balance_history(
         topups = [
             {
                 "id": op.id,
-                "amount": round(float(op.amount or 0), 2),
+                "type": op.type,
+                "amount": pricing.rub(op.amount),
                 "comment": op.comment,
                 "created_at": op.created_at.isoformat() if op.created_at else None,
             }
             for op in ops
-            if op.type in ("topup", "correction")
+            if op.type in ("topup", "correction", "commission")
         ]
 
         return {
-            "balance": round(float(executor.balance or 0), 2),
+            "balance": pricing.rub(executor.balance),
             "period": "7d",
             "period_label": "последние 7 дней",
             "month": None,
             "month_label": None,
             "available_months": available,
             "months_with_data": sorted(months_with_data, reverse=True),
-            "total_earned": round(sum(d["amount"] for d in days_list), 2),
+            "total_earned": pricing.rub(sum(d["amount"] for d in days_list)),
             "days": days_list,
             "weeks": [],
             "earned_by_day": [
-                {"date": d["date"], "amount": d["amount"]} for d in days_list
+                {"date": d["date"], "amount": pricing.rub(d["amount"])} for d in days_list
             ],
             "topups": topups,
-            "total_topped_up": round(sum(t["amount"] for t in topups if t["amount"] > 0), 2),
+            "total_topped_up": pricing.rub(sum(t["amount"] for t in topups if t["amount"] > 0)),
         }
 
     # Выбранный месяц: помесячная статистика с разбивкой по неделям
@@ -745,7 +751,7 @@ def balance_history(
         if month_start.date() <= datetime.strptime(key, "%Y-%m-%d").date() < month_end.date()
     }
 
-    total_earned = round(sum(by_day.values()), 2)
+    total_earned = pricing.rub(sum(by_day.values()))
 
     # Разбивка по неделям внутри месяца (недели — с понедельника).
     # Корзины строим для всего месяца, чтобы график не «исчезал».
@@ -763,7 +769,7 @@ def balance_history(
     while week_start <= last_week:
         week_end = min(week_start + timedelta(days=6), last_day)
         items = week_buckets.get(week_start, [])
-        amount = round(sum(a for _, a in items), 2)
+        amount = pricing.rub(sum(a for _, a in items))
         # Подпись — только по дням выбранного месяца
         label_from = max(week_start, month_start.date())
         weeks.append({
@@ -784,16 +790,17 @@ def balance_history(
     topups = [
         {
             "id": op.id,
-            "amount": round(float(op.amount or 0), 2),
+            "type": op.type,
+            "amount": pricing.rub(op.amount),
             "comment": op.comment,
             "created_at": op.created_at.isoformat() if op.created_at else None,
         }
         for op in ops
-        if op.type in ("topup", "correction")
+        if op.type in ("topup", "correction", "commission")
     ]
 
     return {
-        "balance": round(float(executor.balance or 0), 2),
+        "balance": pricing.rub(executor.balance),
         "days": days,
         "period": "month",
         "period_label": month_label,
@@ -801,15 +808,15 @@ def balance_history(
         "month_label": month_label,
         "available_months": available,
         "months_with_data": sorted(months_with_data, reverse=True),
-        "total_earned": total_earned,
+        "total_earned": pricing.rub(total_earned),
         "weeks": weeks,
         "days": [],
         "earned_by_day": [
-            {"date": key, "amount": value}
+            {"date": key, "amount": pricing.rub(value)}
             for key, value in sorted(by_day.items())
         ],
         "topups": topups,
-        "total_topped_up": round(sum(t["amount"] for t in topups if t["amount"] > 0), 2),
+        "total_topped_up": pricing.rub(sum(t["amount"] for t in topups if t["amount"] > 0)),
     }
 
 
@@ -842,7 +849,12 @@ def skip_order(
     executor: Executor = Depends(get_current_executor),
     db: Session = Depends(get_db),
 ):
-    """Исполнитель пропустил заказ. Два пропуска подряд — снятие с линии."""
+    """Исполнитель пропустил заказ в ленте.
+
+    Штрафов за пропуски и отмены нет (решение владельца): заказ просто
+    уходит к следующему исполнителю, с линии никто не снимается.
+    skip_streak — только статистика, без ограничений.
+    """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(404, "Заказ не найден")
@@ -850,33 +862,7 @@ def skip_order(
     if data.get("executor_id") and int(data["executor_id"]) != executor.id:
         raise HTTPException(403, "Это не ваш заказ")
 
-    if order.status != "created":
-        return {"ok": True, "skip_streak": executor.skip_streak, "taken_offline": False}
-
     executor.skip_streak = int(executor.skip_streak or 0) + 1
-    taken_offline = False
-
-    if executor.skip_streak >= 2:
-        executor.skip_streak = 0
-        executor.is_online = False
-        taken_offline = True
-        db.add(Notification(
-            user_max_id=str(executor.max_id),
-            title="Вы сняты с линии",
-            body="Пропущено два заказа подряд — доступ к заказам отключён. Выйдите на линию снова, когда будете готовы.",
-        ))
-        db.commit()
-        try:
-            send_max_message(
-                executor.max_id,
-                "Пропущено два заказа подряд — вы сняты с линии. "
-                "Вернитесь на линию, когда сможете брать заказы.",
-                bot="executor",
-            )
-        except Exception:
-            pass
-        return {"ok": True, "skip_streak": 0, "taken_offline": True}
-
     db.commit()
     return {"ok": True, "skip_streak": executor.skip_streak, "taken_offline": False}
 
@@ -1533,7 +1519,11 @@ def earnings(
     executor: Executor = Depends(get_current_executor),
     db: Session = Depends(get_db),
 ):
-    """Вновь заработанное по ролям — для подсказки в переключателе ролей."""
+    """Наличный заработок по ролям — для подсказки в переключателе ролей.
+
+    Выручка у исполнителя (оплата наличными); комиссия удерживается
+    отдельным списанием с баланса.
+    """
     _require_same(executor, executor_id)
     days = max(1, min(days, 90))
     since = datetime.utcnow() - timedelta(days=days)
@@ -1546,18 +1536,21 @@ def earnings(
 
     by_role = {}
     total = 0.0
+    commission_total = 0.0
 
     for o in orders:
-        net = (o.total_price or 0) - (o.commission_amount or 0)
+        cash = pricing.rub(o.total_price or 0)
         role = _service_to_role(o.service)
-        by_role[role] = by_role.get(role, 0) + net
-        total += net
+        by_role[role] = by_role.get(role, 0) + cash
+        total += cash
+        commission_total += pricing.rub(o.commission_amount or 0)
 
     return {
         "days": days,
         "orders_count": len(orders),
-        "total": round(total, 2),
-        "by_role": {r: round(v, 2) for r, v in by_role.items()},
+        "total": pricing.rub(total),
+        "commission": pricing.rub(commission_total),
+        "by_role": {r: pricing.rub(v) for r, v in by_role.items()},
     }
 
 class StatusIn(BaseModel):

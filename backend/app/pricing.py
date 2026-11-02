@@ -1,3 +1,16 @@
+import math
+
+# Бесплатное ожидание клиента от «Я на месте», дальше — поминутно
+FREE_WAITING_MINUTES = 2
+WAITING_MINUTE_PRICE = 15
+WAITING_MAX_BILLABLE_MINUTES = 10
+
+
+def rub(value):
+    """Сумма в целых рублях: копеек в проекте нет, половина округляется вверх."""
+    return int(math.floor(float(value or 0) + 0.5))
+
+
 def calc_standard(distance, city_km, out_km, tariff, children, animals, child_seats, manual_increase):
     base = tariff.base_price
     extra_km = max(0, distance - tariff.included_km)
@@ -5,17 +18,16 @@ def calc_standard(distance, city_km, out_km, tariff, children, animals, child_se
     price = max(price, base)
     price *= tariff.coefficient
     options = 50*int(bool(children or animals)) + 50*child_seats
-    return round(price + options + manual_increase, 2)
+    return rub(price + options + manual_increase)
 
 def calc_intercity(distance, tariff, children, animals, child_seats, manual_increase):
     price = max(tariff.min_price, distance*tariff.per_km) * tariff.coefficient
     options = 50*int(bool(children or animals)) + 50*child_seats
-    return round(price + options + manual_increase, 2)
+    return rub(price + options + manual_increase)
 
-def calc_waiting(started_minutes):
-    if started_minutes <= 3: return 50
-    billable = min(started_minutes-3, 10)
-    return 50 + billable*15
+def calc_waiting(minutes):
+    billable = min(max(0, int(minutes) - FREE_WAITING_MINUTES), WAITING_MAX_BILLABLE_MINUTES)
+    return billable * WAITING_MINUTE_PRICE
 
 def commission(total, percent):
-    return round(total*percent/100, 2)
+    return rub(float(total or 0) * float(percent or 0) / 100)

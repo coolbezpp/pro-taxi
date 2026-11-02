@@ -7,9 +7,12 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from app.config import settings
 from app.db import get_db, SessionLocal
-from app import models, pricing, worktime, rating
-from app.services import antifraud
-from app.security import create_token, hash_password, verify_password, get_current_user, get_staff
+from app import models, pricing, worktime, rating, order_states
+from app.services import antifraud, order_flow
+from app.security import (
+    create_token, hash_password, verify_password, get_current_user, get_staff,
+    get_current_executor, get_executor_or_staff, bearer_scheme,
+)
 from pydantic import BaseModel
 app=FastAPI(title="Pro API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -394,8 +397,8 @@ def _create_order_internal(db: Session, data: OrderIn, client):
         meta_in = data.meta or {}
         loaders = max(0, min(int(meta_in.get("loaders") or 0), CARGO_LOADERS_MAX))
         loader_hours = max(0, min(int(meta_in.get("loader_hours") or 0), CARGO_LOADER_HOURS_MAX))
-        base = CARGO_BASE_PRICE + float(data.distance_km or 0) * CARGO_KM_PRICE + loaders * loader_hours * CARGO_LOADER_HOUR_PRICE
-        total = round(base, 2)
+        base = pricing.rub(CARGO_BASE_PRICE + float(data.distance_km or 0) * CARGO_KM_PRICE + loaders * loader_hours * CARGO_LOADER_HOUR_PRICE)
+        total = base
         tariff_code = "cargo"
         meta = {"loaders": loaders, "loader_hours": loader_hours}
     elif service == "tech_help":
@@ -421,7 +424,8 @@ def _create_order_internal(db: Session, data: OrderIn, client):
             base = CARGO_BASE_PRICE + dist * CARGO_KM_PRICE
         else:
             base = float(svc["price"])
-        total = round(base)
+        base = pricing.rub(base)
+        total = base
         tariff_code = "tech_help"
         meta = {"service_key": key, "service_title": svc["title"]}
         if (data.comment or "").strip():
@@ -436,8 +440,8 @@ def _create_order_internal(db: Session, data: OrderIn, client):
         else:
             base=pricing.calc_intercity(data.distance_km,t,data.children,data.animals,data.child_seats,0)
         # Надбавка клиента ограничена 50% от расчётной цены — защита от «фейковых» заказов
-        max_increase=round(base*0.5,2)
-        manual_increase=min(max(0.0,float(data.manual_increase or 0)),max_increase)
+        max_increase=int(base*0.5)
+        manual_increase=min(max(0,pricing.rub(data.manual_increase)),max_increase)
         if data.tariff_code=="standard":
             total=pricing.calc_standard(data.distance_km,data.city_km,data.out_km,t,data.children,data.animals,data.child_seats,manual_increase)
         else:
@@ -450,7 +454,7 @@ def _create_order_internal(db: Session, data: OrderIn, client):
     o=models.Order(client_id=client.id if client else data.client_id,service=service,tariff_code=tariff_code,from_address=data.from_address,to_address=data.to_address,
         from_lat=data.from_lat,from_lon=data.from_lon,to_lat=data.to_lat,to_lon=data.to_lon,distance_km=data.distance_km,
         city_distance_km=data.city_km,out_city_distance_km=data.out_km,base_price=base,options_price=0,
-        manual_increase=manual_increase if service not in ("cargo", "tech_help") else 0,total_price=round(total),commission_percent=cp,
+        manual_increase=manual_increase if service not in ("cargo", "tech_help") else 0,total_price=pricing.rub(total),commission_percent=cp,
         commission_amount=pricing.commission(total,cp),children=data.children,animals=data.animals,child_seats=data.child_seats,
         scheduled_at=data.scheduled_at,status="created",meta=meta)
     db.add(o)
@@ -511,7 +515,7 @@ def my_orders(user=Depends(get_current_user), db: Session=Depends(get_db)):
     ).order_by(models.Order.id.desc()).limit(100).all()
 
     active = next(
-        (o for o in rows if o.status in ("created", "assigned", "accepted", "in_progress")),
+        (o for o in rows if o.status in order_states.CLIENT_ACTIVE_STATUSES),
         None,
     )
 
@@ -713,19 +717,23 @@ def order_share(order_id: int, share_code: str, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/orders/{order_id}/waiting")
-def waiting(order_id:int, minutes:int, db: Session=Depends(get_db)):
+def waiting(order_id:int, minutes:int, staff=Depends(get_staff), db: Session=Depends(get_db)):
+    """Ручная корректировка ожидания оператором (обычно его считает сервер
+    при «Начать поездку» — от отметки «Я на месте»)."""
     o=db.query(models.Order).get(order_id)
     if not o: raise HTTPException(404)
     o.waiting_price=pricing.calc_waiting(minutes)
-    o.total_price=round((o.base_price or 0)+(o.options_price or 0)+(o.waiting_price or 0)+(o.manual_increase or 0))
+    o.total_price=pricing.rub((o.base_price or 0)+(o.options_price or 0)+(o.waiting_price or 0)+(o.manual_increase or 0))
     o.commission_amount=pricing.commission(o.total_price,o.commission_percent)
     db.commit(); return o
 
 @app.post("/api/orders/{order_id}/increase")
-def increase(order_id:int, db: Session=Depends(get_db)):
-    o=db.query(models.Order).get(order_id)
-    if not o: raise HTTPException(404)
-    o.manual_increase+=50; o.total_price+=50
+def increase(order_id:int, user=Depends(get_current_user), db: Session=Depends(get_db)):
+    """Клиент поднимает цену своего заказа, пока ищем исполнителя."""
+    o=_client_order(db, order_id, user)
+    if o.status != order_states.CREATED:
+        raise HTTPException(409, "Цену можно поднять только пока ищем исполнителя")
+    o.manual_increase=(o.manual_increase or 0)+50; o.total_price=pricing.rub(o.total_price)+50
     o.commission_amount=pricing.commission(o.total_price,o.commission_percent)
     db.commit(); return o
 
@@ -793,12 +801,24 @@ def available_orders(executor_id: int, role: str, db: Session = Depends(get_db))
     return result
 
 @app.post("/api/orders/{order_id}/assign/{executor_id}")
-def assign(order_id:int, executor_id:int, db: Session=Depends(get_db)):
-    o = db.query(models.Order).get(order_id)
+def assign(
+    order_id:int,
+    executor_id:int,
+    who=Depends(get_executor_or_staff),
+    db: Session=Depends(get_db),
+):
+    """Исполнитель берёт заказ из ленты (сразу «Принят») или оператор
+    назначает исполнителя (у того ASSIGNED_ACCEPT_SECONDS на принятие)."""
+    kind, principal = who
+    if kind == "executor" and principal.id != executor_id:
+        raise HTTPException(403, "Взять заказ можно только на себя")
+
+    # Блокировка строки: два исполнителя не возьмут один заказ одновременно
+    o = db.query(models.Order).filter(models.Order.id == order_id).with_for_update().first()
     if not o:
         raise HTTPException(404, "Заказ не найден")
 
-    if o.status not in ("created", "chain_reserved"):
+    if o.status != order_states.CREATED:
         raise HTTPException(409, "Заказ недоступен для принятия")
 
     executor = db.query(models.Executor).get(executor_id)
@@ -842,131 +862,131 @@ def assign(order_id:int, executor_id:int, db: Session=Depends(get_db)):
 
     active = db.query(models.Order).filter(
         models.Order.executor_id == executor_id,
-        models.Order.status.in_(["assigned", "accepted", "in_progress"])
+        models.Order.status.in_(order_states.ACTIVE_STATUSES)
     ).first()
-
-    is_reserved_chain = (
-        o.status == "chain_reserved"
-        and o.chain_reserved_order_id == active.id if active else False
-    )
-
-    if active and not is_reserved_chain:
+    if active:
         raise HTTPException(409, "У исполнителя уже есть активный заказ")
-
-    if is_reserved_chain:
-        current = db.query(models.Order).get(active.id)
-        current_intercity = "intercity" in (current.tariff_code or "").lower()
-        reverse = (
-            current.from_address == o.to_address
-            and current.to_address == o.from_address
-        )
-        if current_intercity and not reverse:
-            raise HTTPException(400, "Для межгорода доступен только встречный заказ")
 
     o.executor_id = executor_id
     o.executor_role = required_role
-    o.status = "assigned"
     o.planned_completion_at = estimate_completion(o)
+    if kind == "executor":
+        order_flow.apply(db, o, "take", "executor", executor_id)
+    else:
+        order_flow.apply(db, o, "assign", "staff", executor_id)
 
-    db.add(models.OrderEvent(order_id=o.id, event="assigned"))
-
-    db.add(models.Notification(
-        user_max_id=executor.max_id,
-        title="Заказ назначен",
-        body=f"Заказ №{o.id}: {o.from_address} → {o.to_address}, {o.total_price} ₽",
-        order_id=o.id,
-        category="order"
-    ))
-
-    if o.client_id:
-        client = db.query(models.Client).get(o.client_id)
+    client = db.query(models.Client).get(o.client_id) if o.client_id else None
+    if kind == "executor":
         if client:
             db.add(models.Notification(
                 user_max_id=client.max_id,
-                title="Исполнитель назначен",
-                body=f"Ваш заказ №{o.id} принят. Исполнитель: {executor.name or 'Исполнитель'}",
+                title="Исполнитель принял заказ",
+                body=f"Заказ №{o.id} принят. Исполнитель: {executor.name or 'Исполнитель'}. Едет к вам.",
                 order_id=o.id,
                 category="order"
             ))
+    else:
+        db.add(models.Notification(
+            user_max_id=executor.max_id,
+            title="Заказ назначен",
+            body=f"Заказ №{o.id}: {o.from_address} → {o.to_address}, {pricing.rub(o.total_price)} ₽. "
+                 f"Примите его в течение {order_states.ASSIGNED_ACCEPT_SECONDS} секунд.",
+            order_id=o.id,
+            category="order"
+        ))
 
     db.commit()
 
     # Антифрод: назначение — событие для пересчёта сигналов пары
     antifraud.evaluate_pair(db, o.client_id, o.executor_id)
 
-    send_max_message(
-        executor.max_id,
-        f"Новый заказ №{o.id}: {o.from_address} → {o.to_address}, {o.total_price} ₽. Откройте миниап исполнителя.",
-        bot="executor"
-    )
+    if kind == "executor":
+        if client:
+            send_max_message(
+                client.max_id,
+                f"Ваш заказ №{o.id} принят. Исполнитель: {executor.name or 'Исполнитель'}, едет к вам.",
+                bot="client"
+            )
+    else:
+        send_max_message(
+            executor.max_id,
+            f"Вам назначен заказ №{o.id}: {o.from_address} → {o.to_address}, {pricing.rub(o.total_price)} ₽. "
+            f"Откройте миниапп и примите его в течение {order_states.ASSIGNED_ACCEPT_SECONDS} секунд.",
+            bot="executor"
+        )
+
+    db.refresh(o)
+    return o
+
+
+def _finish_order(db: Session, o, actor: str, actor_id=None):
+    """Завершение: событие completed, комиссия с баланса (оплата наличными),
+    активация следующего заказа цепочки, сообщение клиенту."""
+    order_flow.apply(db, o, "complete", actor, actor_id, {"commission": pricing.rub(o.commission_amount)})
+    order_flow.charge_commission(db, o)
+    nxt = order_flow.activate_chain(db, o, actor)
+    db.commit()
+    db.refresh(o)
+
+    # Антифрод: завершение — событие для пересчёта сигналов пары
+    antifraud.evaluate_pair(db, o.client_id, o.executor_id)
 
     if o.client_id:
         client = db.query(models.Client).get(o.client_id)
         if client:
             send_max_message(
                 client.max_id,
-                f"Ваш заказ №{o.id} принят. Исполнитель: {executor.name or 'Исполнитель'}.",
-                bot="client"
-            )
-
-    return o
-
-@app.post("/api/orders/{order_id}/activate-chain/{executor_id}")
-def activate_chain(order_id:int, executor_id:int, db: Session=Depends(get_db)):
-    completed = db.query(models.Order).get(order_id)
-    if not completed or completed.executor_id != executor_id:
-        raise HTTPException(404, "Завершённый заказ не найден")
-
-    reserved = db.query(models.Order).filter(
-        models.Order.chain_reserved_order_id == order_id,
-        models.Order.executor_id == executor_id,
-        models.Order.status == "chain_reserved"
-    ).first()
-
-    if not reserved:
-        return {"activated": False}
-
-    reserved.status = "assigned"
-    reserved.planned_completion_at = estimate_completion(reserved)
-    db.add(models.OrderEvent(order_id=reserved.id, event="chain_activated"))
-    db.commit()
-    return {"activated": True, "order_id": reserved.id}
-
-@app.post("/api/orders/{order_id}/complete")
-def complete(order_id:int, db: Session=Depends(get_db)):
-    o=db.query(models.Order).get(order_id)
-    if not o or not o.executor_id: raise HTTPException(400)
-    if o.status == "completed":
-        raise HTTPException(409, "Заказ уже завершён")
-    if o.status not in ("assigned","accepted","in_progress"):
-        raise HTTPException(400, "Заказ ещё не выполняется")
-    o.status="completed"
-    executor=db.query(models.Executor).get(o.executor_id)
-    payout=round((o.total_price or 0)-(o.commission_amount or 0),2)
-    if executor:
-        executor.balance=(executor.balance or 0)+payout
-        db.add(models.ExecutorBalanceOp(
-            executor_id=executor.id,
-            type="earning",
-            amount=payout,
-            order_id=o.id,
-            comment=f"Заказ №{o.id}",
-        ))
-        worktime.touch_session(db, executor.id)
-    db.add(models.OrderEvent(order_id=o.id,event="completed",payload={"payout":payout,"commission":o.commission_amount})); db.commit(); db.refresh(o)
-
-    # Антифрод: завершение — событие для пересчёта сигналов пары
-    antifraud.evaluate_pair(db, o.client_id, o.executor_id)
-
-    if o.client_id:
-        client=db.query(models.Client).get(o.client_id)
-        if client:
-            send_max_message(
-                client.max_id,
-                f"Заказ №{o.id} завершён. Спасибо, что выбрали «Про»!",
+                f"Заказ №{o.id} завершён. К оплате наличными: {pricing.rub(o.total_price)} ₽. "
+                "Спасибо, что выбрали «Про»!",
                 bot="client",
             )
+    if nxt:
+        executor = db.query(models.Executor).get(o.executor_id)
+        if executor:
+            send_max_message(
+                executor.max_id,
+                f"Следующий заказ №{nxt.id} из цепочки назначен вам: "
+                f"{nxt.from_address} → {nxt.to_address}. Примите его в миниаппе.",
+                bot="executor",
+            )
     return o
+
+
+@app.post("/api/orders/{order_id}/activate-chain/{executor_id}")
+def activate_chain(
+    order_id:int,
+    executor_id:int,
+    who=Depends(get_executor_or_staff),
+    db: Session=Depends(get_db),
+):
+    """Следующий заказ цепочки активируется сам при завершении текущего.
+    Эндпоинт оставлен для ручной активации (исполнитель или оператор)."""
+    kind, principal = who
+    if kind == "executor" and principal.id != executor_id:
+        raise HTTPException(403, "Это не ваш заказ")
+    completed = db.query(models.Order).get(order_id)
+    if not completed or completed.executor_id != executor_id or completed.status != order_states.COMPLETED:
+        raise HTTPException(404, "Завершённый заказ не найден")
+    nxt = order_flow.activate_chain(db, completed, kind)
+    if not nxt:
+        return {"activated": False}
+    db.commit()
+    return {"activated": True, "order_id": nxt.id}
+
+
+@app.post("/api/orders/{order_id}/complete")
+def complete(order_id:int, who=Depends(get_executor_or_staff), db: Session=Depends(get_db)):
+    """Завершить заказ может только его исполнитель (после «Начать поездку»)
+    или оператор."""
+    kind, principal = who
+    o = db.query(models.Order).filter(models.Order.id == order_id).with_for_update().first()
+    if not o:
+        raise HTTPException(404, "Заказ не найден")
+    if kind == "executor" and o.executor_id != principal.id:
+        raise HTTPException(403, "Это не ваш заказ")
+    if o.status == order_states.COMPLETED:
+        raise HTTPException(409, "Заказ уже завершён")
+    return _finish_order(db, o, kind, principal.id if kind == "executor" else None)
 
 # --- settlements ---
 @app.get("/api/settlements/intercity")
@@ -1399,9 +1419,9 @@ def create_master_order(data: MasterOrderIn, db: Session = Depends(get_db), user
     if data.scheduled_at:
         scheduled = datetime.fromisoformat(data.scheduled_at.replace("Z", "+00:00"))
 
-    price = service.price or 0
+    price = pricing.rub(service.price or 0)
     commission_percent = 10
-    commission_amount = round(price * commission_percent / 100, 2)
+    commission_amount = pricing.commission(price, commission_percent)
 
     client = _client_from_token(db, user)
 
@@ -1488,7 +1508,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
     if client:
         order = db.query(models.Order).filter(
             models.Order.client_id == client.id,
-            models.Order.status.in_(["created", "assigned", "accepted", "in_progress"]),
+            models.Order.status.in_(order_states.CLIENT_ACTIVE_STATUSES),
         ).order_by(models.Order.id.desc()).first()
 
         if order:
@@ -1525,7 +1545,7 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
     if executor:
         order = db.query(models.Order).filter(
             models.Order.executor_id == executor.id,
-            models.Order.status.in_(["accepted", "in_progress"]),
+            models.Order.status.in_(order_states.ACTIVE_STATUSES),
         ).order_by(models.Order.id.desc()).first()
 
         if order:
@@ -1601,18 +1621,21 @@ def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = De
         # Повторный клик по уже отменённому заказу — не ошибка, возвращаем как есть
         return _order_payload(db, order)
 
-    if order.status not in ["created", "assigned", "accepted"]:
+    if order.status not in order_states.TRANSITIONS["client_cancel"][0]:
         raise HTTPException(400, "Этот заказ уже нельзя отменить")
 
-    order.status = "cancelled"
+    executor_id = order.executor_id
+    order_flow.apply(db, order, "client_cancel", "client")
+    # Отмена брони — следующий заказ цепочки возвращается в ленту
+    order_flow.release_chain(db, order, "client")
     db.commit()
 
     # Антифрод: отмена — событие для пересчёта сигналов пары
     antifraud.evaluate_pair(db, order.client_id, order.executor_id)
 
-    if order.executor_id:
+    if executor_id:
         executor = db.query(models.Executor).filter(
-            models.Executor.id == order.executor_id
+            models.Executor.id == executor_id
         ).first()
 
         if executor:
@@ -1631,136 +1654,57 @@ def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = De
     return {"ok": True, "status": order.status}
 
 
-@app.post("/api/orders/{order_id}/executor-action")
-def executor_order_action(
-    order_id: int,
-    action: dict,
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
+def _executor_order(db: Session, order_id: int, executor):
+    """Заказ исполнителя: 404, если нет, 403 — если чужой."""
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
-
     if not order:
         raise HTTPException(404, "Заказ не найден")
+    if order.executor_id != executor.id:
+        raise HTTPException(403, "Это не ваш заказ")
+    return order
 
-    max_id = _token_max_id(db, user)
-    executor = db.query(models.Executor).filter(
-        models.Executor.max_id == max_id
-    ).first()
 
-    if not executor:
-        raise HTTPException(403, "Только исполнитель может управлять заказом")
-
-    act = action.get("action")
-
-    if act == "accept":
-        if order.status != "created" or order.executor_id:
-            raise HTTPException(400, "Заказ уже занят или недоступен")
-
-        # Анти-самозаказы: свой же номер у клиента и исполнителя — нельзя
-        so = self_order_blocked(db, order, executor)
-        if so:
-            raise HTTPException(403, so)
-
-        # Контроль рабочего времени: при лимите или во время отдыха заказ не принять
-        work = worktime.work_state(db, executor.id)
-        if work.get("status") == worktime.STATUS_BLOCKED:
-            raise HTTPException(409, "Исчерпан лимит рабочего времени — новые заказы не поступают")
-        if work.get("status") == worktime.STATUS_RESTING:
-            raise HTTPException(409, "После смены нужен отдых 6 часов — вернёмся к заказам позже")
-        worktime.start_session(db, executor.id)
-        # Успешный приём сбрасывает счётчик пропусков
-        executor.skip_streak = 0
-
-        order.executor_id = executor.id
-        order.status = "accepted"
-
-        if order.client_id:
-            client = db.query(models.Client).filter(
-                models.Client.id == order.client_id
-            ).first()
-
-            if client:
-                db.add(models.Notification(
-                    user_max_id=str(client.max_id),
-                    title="Заказ принят",
-                    body=f"Исполнитель принял ваш заказ №{order.id}.",
-                    category="order"
-                ))
-
-    elif act == "start":
-        if order.executor_id != executor.id or order.status != "accepted":
-            raise HTTPException(400, "Нельзя начать этот заказ")
-
-        order.status = "in_progress"
-        worktime.touch_session(db, executor.id)
-
-        if order.client_id:
-            client = db.query(models.Client).filter(
-                models.Client.id == order.client_id
-            ).first()
-
-            if client:
-                db.add(models.Notification(
-                    user_max_id=str(client.max_id),
-                    title="Заказ выполняется",
-                    body=f"Исполнитель начал заказ №{order.id}.",
-                    category="order"
-                ))
-
-    elif act == "complete":
-        if order.executor_id != executor.id or order.status != "in_progress":
-            raise HTTPException(400, "Нельзя завершить этот заказ")
-
-        order.status = "completed"
-
-        commission_percent = 15.0
-        setting = db.query(models.Setting).filter(
-            models.Setting.key == "commission_percent"
-        ).first()
-
-        if setting:
-            try:
-                commission_percent = float(setting.value)
-            except Exception:
-                pass
-
-        commission = round(order.total_price * commission_percent / 100, 2)
-        executor.balance += order.total_price - commission
-        db.add(models.ExecutorBalanceOp(
-            executor_id=executor.id,
-            type="earning",
-            amount=round(order.total_price - commission, 2),
-            order_id=order.id,
-            comment=f"Заказ №{order.id}",
-        ))
-        worktime.touch_session(db, executor.id)
-
-        if order.client_id:
-            client = db.query(models.Client).filter(
-                models.Client.id == order.client_id
-            ).first()
-
-            if client:
-                db.add(models.Notification(
-                    user_max_id=str(client.max_id),
-                    title="Заказ завершён",
-                    body=f"Заказ №{order.id} завершён. Спасибо, что выбрали «Про».",
-                    category="order"
-                ))
-                send_max_message(
-                    client.max_id,
-                    f"Заказ №{order.id} завершён. Спасибо, что выбрали «Про»!",
-                    bot="client",
-                )
-
-    else:
-        raise HTTPException(400, "Неизвестное действие")
-
+@app.post("/api/orders/{order_id}/arrived")
+def order_arrived(order_id: int, credentials=Depends(bearer_scheme), db: Session = Depends(get_db)):
+    """Исполнитель приехал на точку подачи — стартует бесплатное ожидание."""
+    executor = get_current_executor(credentials, db)
+    o = _executor_order(db, order_id, executor)
+    order_flow.apply(db, o, "arrive", "executor", executor.id)
+    worktime.touch_session(db, executor.id)
+    if o.client_id:
+        client = db.query(models.Client).get(o.client_id)
+        if client:
+            db.add(models.Notification(
+                user_max_id=str(client.max_id),
+                title="Исполнитель на месте",
+                body=f"Исполнитель приехал по заказу №{o.id}. "
+                     f"Первые {pricing.FREE_WAITING_MINUTES} минут ожидания бесплатны.",
+                order_id=o.id,
+                category="order",
+            ))
     db.commit()
-    db.refresh(order)
+    db.refresh(o)
+    return o
 
-    return {"ok": True, "status": order.status}
+
+@app.post("/api/orders/{order_id}/decline")
+def order_decline(order_id: int, credentials=Depends(bearer_scheme), db: Session = Depends(get_db)):
+    """Отказ исполнителя от назначенного заказа (и по таймауту принятия)."""
+    executor = get_current_executor(credentials, db)
+    o = db.query(models.Order).filter(models.Order.id == order_id).with_for_update().first()
+    if not o:
+        raise HTTPException(404, "Заказ не найден")
+    if o.executor_id != executor.id:
+        raise HTTPException(403, "Это не ваш заказ")
+    order_flow.apply(db, o, "decline", "executor", executor.id, {"reason": "отказ"})
+    # Заказ не поедет: бронь следующего в цепочке возвращаем в ленту
+    order_flow.release_chain(db, o, "executor")
+    executor.skip_streak = executor.skip_streak or 0  # без штрафов: счётчик только статистика
+    db.commit()
+    db.refresh(o)
+    return o
+
+
 @app.get("/api/executor/available-orders")
 def executor_available_orders(
     service: str | None = None,
@@ -1841,7 +1785,7 @@ def admin_client_profile(client_id: int, staff=Depends(get_staff), db: Session=D
     ).order_by(models.Order.id.desc()).limit(50).all()
 
     active = next(
-        (o for o in orders if o.status in ("created", "assigned", "accepted", "in_progress")),
+        (o for o in orders if o.status in order_states.CLIENT_ACTIVE_STATUSES),
         None,
     )
 
@@ -1851,9 +1795,9 @@ def admin_client_profile(client_id: int, staff=Depends(get_staff), db: Session=D
             "max_id": client.max_id,
             "name": client.name or client.phone or client.max_id,
             "phone": client.phone,
-            "balance": round(float(client.balance or 0), 2),
+            "balance": pricing.rub(client.balance),
             "orders_count": len(orders),
-            "total_sum": round(sum(float(o.total_price or 0) for o in orders), 2),
+            "total_sum": pricing.rub(sum(float(o.total_price or 0) for o in orders)),
             "favorites": [
                 {"id": o.id, "title": o.favorite_title, "from_address": o.from_address, "to_address": o.to_address}
                 for o in orders if o.favorite
@@ -1983,7 +1927,7 @@ def change_executor_balance(
     ))
     send_max_message(
         executor.max_id,
-        f"Ваш баланс изменён на {amount} ₽. Текущий баланс: {round(executor.balance, 2)} ₽.",
+        f"Ваш баланс изменён на {pricing.rub(amount)} ₽. Текущий баланс: {pricing.rub(executor.balance)} ₽.",
         bot="executor",
     )
     db.commit()
@@ -2018,7 +1962,7 @@ def change_client_balance(
     ))
     send_max_message(
         client.max_id,
-        f"Ваш баланс изменён на {amount} ₽. Текущий баланс: {round(client.balance, 2)} ₽.",
+        f"Ваш баланс изменён на {pricing.rub(amount)} ₽. Текущий баланс: {pricing.rub(client.balance)} ₽.",
         bot="client",
     )
     db.commit()
@@ -2122,11 +2066,9 @@ def admin_dashboard(
     # Итоги по заказам
     completed = [r for r in rows if r[0].status == "completed"]
     cancelled = [r for r in rows if r[0].status == "cancelled"]
-    active = [r for r in rows if r[0].status in (
-        "created", "assigned", "accepted", "in_progress",
-    )]
-    revenue = round(sum(float(r[0].total_price or 0) for r in completed), 2)
-    commission = round(sum(float(r[0].commission_amount or 0) for r in completed), 2)
+    active = [r for r in rows if r[0].status in order_states.CLIENT_ACTIVE_STATUSES]
+    revenue = pricing.rub(sum(float(r[0].total_price or 0) for r in completed))
+    commission = pricing.rub(sum(float(r[0].commission_amount or 0) for r in completed))
     client_ids = {r[0].client_id for r in rows if r[0].client_id}
 
     # Динамика по дням
@@ -2161,7 +2103,7 @@ def admin_dashboard(
             m["revenue"] += float(o.total_price or 0)
     by_district = sorted(dist_map.values(), key=lambda x: -x["orders"])
     for m in by_district:
-        m["revenue"] = round(m["revenue"], 2)
+        m["revenue"] = pricing.rub(m["revenue"])
 
     # Роли: исполнители (район, без ролевого фильтра) + заказы за период/район
     role_map = {}
@@ -2228,7 +2170,7 @@ def admin_dashboard(
             "active": len(active),
             "revenue": revenue,
             "commission": commission,
-            "avg_check": round(revenue / len(completed), 2) if completed else 0,
+            "avg_check": pricing.rub(revenue / len(completed)) if completed else 0,
             "clients": len(client_ids),
             "executors": len(f_executors),
             "online": sum(1 for e in f_executors if e.is_online),
@@ -2251,8 +2193,8 @@ def admin_analytics(admin=Depends(get_admin), db: Session = Depends(get_db)):
     completed_orders = [o for o in orders if o.status == "completed"]
     completed_count = len(completed_orders)
 
-    gross_volume = sum(o.total_price or 0 for o in completed_orders)
-    average_check = round(gross_volume / completed_count, 2) if completed_count else 0
+    gross_volume = pricing.rub(sum(o.total_price or 0 for o in completed_orders))
+    average_check = pricing.rub(gross_volume / completed_count) if completed_count else 0
 
     commission_percent = 15.0
     setting = db.query(models.Setting).filter(
@@ -2265,10 +2207,7 @@ def admin_analytics(admin=Depends(get_admin), db: Session = Depends(get_db)):
         except Exception:
             pass
 
-    service_revenue = round(
-        gross_volume * commission_percent / 100,
-        2,
-    )
+    service_revenue = pricing.commission(gross_volume, commission_percent)
 
     from datetime import timedelta
 
@@ -2889,31 +2828,80 @@ from .routers.fraud import router as fraud_router
 app.include_router(fraud_router)
 
 
-ORDER_STALE_MINUTES = 5
+ORDER_STALE_MINUTES = order_states.ORDER_STALE_MINUTES
 
 
 async def _order_timeout_watcher():
-    """Авто-закрытие заказов, которые не были приняты исполнителем в течение
-    5 минут (пока исполнитель не взял заказ, он живёт в статусе created).
-    После истечения окна заказ закрывается (cancelled), клиенту уходит
-    уведомление — с ним можно сразу предложить заказать ещё раз."""
+    """Два таймаута жизненного цикла:
+
+    1. Назначенный оператором заказ не принят за
+       order_states.ASSIGNED_ACCEPT_SECONDS секунд — возвращаем в ленту
+       (без штрафов, без отмены: другие исполнители снова видят заказ).
+    2. Заказ без исполнителя ждёт дольше ORDER_STALE_MINUTES минут —
+       закрываем (cancelled) и предлагаем клиенту повторить.
+       Предзаказы (scheduled_at в будущем) не трогаем: их время приходит само.
+    """
     import asyncio as _a
     from app.services.max_notify import send_max_message
     while True:
         try:
             db = SessionLocal()
             now = datetime.utcnow()
+
+            # 1. Таймаут принятия назначенного заказа
+            stale_assigned = (
+                db.query(models.Order)
+                .filter(
+                    models.Order.status == order_states.ASSIGNED,
+                    models.Order.created_at < now,
+                )
+                .all()
+            )
+            for o in stale_assigned:
+                left = order_flow.accept_seconds_left(db, o, now)
+                if left is None or left > 0:
+                    continue
+                executor_id = o.executor_id
+                order_flow.apply(db, o, "decline", "timeout", executor_id,
+                                 {"reason": "не принят за "
+                                            f"{order_states.ASSIGNED_ACCEPT_SECONDS} сек"})
+                db.commit()
+                try:
+                    if executor_id:
+                        executor = db.query(models.Executor).filter(
+                            models.Executor.id == executor_id
+                        ).first()
+                        if executor:
+                            send_max_message(
+                                executor.max_id,
+                                f"Заказ №{o.id} снова в общем пуле: вы не приняли его "
+                                f"за {order_states.ASSIGNED_ACCEPT_SECONDS} секунд.",
+                                bot="executor",
+                            )
+                except Exception:
+                    pass
+
+            # 2. Заказ без исполнителя «висит» слишком долго
             stale = (
                 db.query(models.Order)
                 .filter(
-                    models.Order.status == "created",
-                    models.Order.created_at < now - timedelta(minutes=ORDER_STALE_MINUTES),
+                    models.Order.status == order_states.CREATED,
+                    models.Order.executor_id.is_(None),
                 )
                 .all()
             )
             for o in stale:
-                o.status = "cancelled"
-                db.add(models.OrderEvent(order_id=o.id, event="cancelled", payload={"reason": "timeout"}))
+                # Предзаказ: время подачи в будущем — ждём, не отменяем
+                scheduled = o.scheduled_at
+                if scheduled is not None and scheduled.tzinfo is not None:
+                    scheduled = scheduled.replace(tzinfo=None)
+                if scheduled and scheduled > now:
+                    continue
+                waiting_from = order_flow.waiting_since(db, o, now)
+                if (now - waiting_from).total_seconds() < ORDER_STALE_MINUTES * 60:
+                    continue
+                order_flow.apply(db, o, "timeout", "system", None,
+                                 {"reason": f"не взят за {ORDER_STALE_MINUTES} мин"})
                 db.commit()
                 try:
                     if o.client_id:
@@ -2921,7 +2909,8 @@ async def _order_timeout_watcher():
                         if client:
                             send_max_message(
                                 client.max_id,
-                                f"Заказ №{o.id} закрыт: исполнитель не принял его в течение 5 минут. Хотите, чтобы мы нашли исполнителя ещё раз?",
+                                f"Заказ №{o.id} закрыт: исполнитель не принял его в течение "
+                                f"{ORDER_STALE_MINUTES} минут. Хотите, чтобы мы нашли исполнителя ещё раз?",
                                 bot="client",
                             )
                 except Exception:
@@ -2929,7 +2918,8 @@ async def _order_timeout_watcher():
             db.close()
         except Exception:
             pass
-        await _a.sleep(30)
+        # Опрос чаще секунды не нужен: таймер принятия — 8 секунд
+        await _a.sleep(2)
 
 
 @app.on_event("startup")

@@ -365,6 +365,7 @@ const STATUS_LABELS = {
   created: "Создан",
   accepted: "Принят",
   assigned: "Назначен",
+  arrived: "На месте",
   in_progress: "Выполняется",
   completed: "Завершён",
   cancelled: "Отменён",
@@ -374,6 +375,7 @@ const STATUS_COLORS = {
   created: { background: "#eee9ff", color: "#6545ed" },
   accepted: { background: "#e8f0fe", color: "#1d4ed8" },
   assigned: { background: "#fff4e5", color: "#b45309" },
+  arrived: { background: "#e0fbff", color: "#0e7490" },
   in_progress: { background: "#e0f2fe", color: "#0369a1" },
   completed: { background: "#e6f7ed", color: "#177e46" },
   cancelled: { background: "#ffe9ec", color: "#d92b45" },
@@ -1489,6 +1491,7 @@ export default function App() {
                     <option value="created">Создан</option>
                     <option value="accepted">Принят</option>
                     <option value="assigned">Назначен</option>
+                    <option value="arrived">На месте</option>
                     <option value="in_progress">Выполняется</option>
                     <option value="completed">Завершён</option>
                     <option value="cancelled">Отменён</option>
@@ -3100,7 +3103,10 @@ export default function App() {
                         padding: "9px 0", borderBottom: "1px solid #eeecf3", fontSize: 13.5,
                       }}>
                         <span>
-                          {op.type === "earning" ? "Заработок за заказ" : op.type === "topup" ? "Пополнение" : "Корректировка"}
+                          {op.type === "earning" ? "Заработок за заказ"
+                            : op.type === "topup" ? "Пополнение"
+                            : op.type === "commission" ? "Комиссия за заказ"
+                            : "Корректировка"}
                           {op.comment ? ` · ${op.comment}` : ""}
                           <small style={{ display: "block", color: "#9a97ab", fontSize: 11.5, marginTop: 2 }}>
                             {op.created_at ? new Date(op.created_at).toLocaleString("ru-RU") : ""}

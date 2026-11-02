@@ -477,6 +477,10 @@ function ExecutorStatsPage({ me, t, m, onBack }) {
           За {data?.period_label || "период"}:{" "}
           <b style={{ color: m.text }}>{data ? `${Number(data.total_earned).toLocaleString("ru-RU")} ₽` : "—"}</b>
         </span>
+        <span style={{ display: "block", marginTop: 10, fontSize: 12.5, lineHeight: 1.45, color: m.sub }}>
+          Оплата заказов — наличными клиенту. Комиссия за заказ списывается
+          с баланса, выручка на баланс не зачисляется.
+        </span>
       </div>
 
       {/* Столбики: по дням за 7 дней или по неделям за месяц */}
@@ -532,7 +536,8 @@ function ExecutorStatsPage({ me, t, m, onBack }) {
               padding: "11px 0", borderBottom: `1px solid ${m.cardAltBorder}`,
             }}>
               <span style={{ fontSize: 13.5, color: m.text }}>
-                {op.comment || (op.amount > 0 ? "Пополнение" : "Корректировка")}
+                {op.comment || (op.type === "commission" ? "Комиссия за заказ"
+                  : op.amount > 0 ? "Пополнение" : "Корректировка")}
                 <small style={{ display: "block", color: m.sub, fontSize: 11.5, marginTop: 2 }}>
                   {op.created_at ? new Date(op.created_at).toLocaleString("ru-RU") : ""}
                 </small>
@@ -1488,7 +1493,7 @@ function ExecutorOrderDetail({ t, orderId, onClose }) {
     }
     load();
     // Активный заказ трекаем живьём, завершённый/отменённый — один раз
-    const active = ["created", "assigned", "accepted", "in_progress"].includes(order?.status);
+    const active = ["created", "assigned", "accepted", "arrived", "in_progress"].includes(order?.status);
     const it = active ? setInterval(load, 5000) : null;
     return () => { alive = false; if (it) clearInterval(it); };
   }, [orderId, order?.status]);
@@ -2012,12 +2017,13 @@ function roleHue(id) {
   return r ? r.hue : "accent";
 }
 
-const ACCEPT_SECONDS = 15;
+const ACCEPT_SECONDS = 8; // решение владельца: на принятие заказа 8 секунд
 
 const STATUS_RU = {
   created: "Новый",
   assigned: "Назначен вам",
-  accepted: "Вы на месте",
+  accepted: "Едете к клиенту",
+  arrived: "Вы на месте",
   in_progress: "Выполняется",
   completed: "Завершён",
   cancelled: "Отменён",
@@ -2029,6 +2035,27 @@ const SERVICE_LABELS = {
   cargo: "Грузоперевозка",
   master: "Заказ мастера",
 };
+
+// Обратный отсчёт принятия назначенного заказа: тикает локально, по нулю
+// список обновится по опросу — сервер уже вернул заказ в общий пул
+function AcceptCountdown({ left }) {
+  const [sec, setSec] = useState(typeof left === "number" ? left : 0);
+  useEffect(() => { setSec(typeof left === "number" ? left : 0); }, [left]);
+  useEffect(() => {
+    if (sec <= 0) return;
+    const t = setTimeout(() => setSec(s => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [sec]);
+  if (typeof left !== "number" || sec <= 0) return null;
+  return (
+    <p style={{
+      margin: "8px 0 0", fontSize: 12.5, fontWeight: 800,
+      color: sec <= 3 ? "#d92b45" : "#8a86a8",
+    }}>
+      Примите за {sec} сек — иначе заказ уйдёт в общий пул (без штрафа)
+    </p>
+  );
+}
 
 // Детали входящего заказа: время подачи, грузчики, услуга мастера, комментарий
 function orderDetails(o) {
@@ -2230,7 +2257,7 @@ export default function App() {
 
   async function loadChain() {
     if (!me || !myOrders.length) return;
-    const active = myOrders.find(o => ["assigned", "accepted", "in_progress"].includes(o.status));
+    const active = myOrders.find(o => ["assigned", "accepted", "arrived", "in_progress"].includes(o.status));
     if (!active) {
       setChain(null);
       return;
@@ -2259,7 +2286,13 @@ export default function App() {
       const it = setInterval(loadOrders, 5000);
       return () => clearInterval(it);
     }
-    if (me && page === "my") { loadMyOrders(); loadChain(); }
+    if (me && page === "my") {
+      loadMyOrders();
+      loadChain();
+      // Назначенный оператором заказ живёт 8 секунд — держим список свежим
+      const it = setInterval(() => { loadMyOrders(); loadChain(); }, 3000);
+      return () => clearInterval(it);
+    }
     if (me && page === "profile") { loadEarnings(); }
   }, [me, online, page]);
 
@@ -2615,7 +2648,7 @@ export default function App() {
 
   // Геопозиция для слежения за исполнителем: пока есть активный заказ
   useEffect(() => {
-    const active = myOrders.find(o => ["assigned", "accepted", "in_progress"].includes(o.status));
+    const active = myOrders.find(o => ["assigned", "accepted", "arrived", "in_progress"].includes(o.status));
     if (!me || !active) return undefined;
 
     const send = () => {
@@ -2707,6 +2740,30 @@ export default function App() {
     }
   }
 
+  // «Я на месте»: стартует бесплатное ожидание (2 мин), дальше поминутно
+  async function arriveOrder(orderId) {
+    try {
+      setError("");
+      await api(`/orders/${orderId}/arrived`, { method: "POST" });
+      await loadMyOrders();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  // Отказ исполнителя после принятия: заказ возвращается в ленту, без штрафов
+  async function declineOrder(orderId) {
+    if (!confirm("Отказаться от заказа? Он вернётся в общий пул, штрафа нет.")) return;
+    try {
+      setError("");
+      await api(`/orders/${orderId}/decline`, { method: "POST" });
+      await loadMyOrders();
+      loadOrders();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function startOrder(orderId) {
     try {
       setError("");
@@ -2747,7 +2804,7 @@ export default function App() {
 
   async function reserveChain(order) {
     try {
-      const active = myOrders.find(o => ["assigned", "accepted", "in_progress"].includes(o.status));
+      const active = myOrders.find(o => ["assigned", "accepted", "arrived", "in_progress"].includes(o.status));
       await api(`/orders/${active.id}/chain/${order.id}/reserve?executor_id=${me.id}`, { method: "POST" });
       setChain(null);
       loadMyOrders();
@@ -2813,7 +2870,7 @@ export default function App() {
     && (!o.rated || o.rated_value === "dislike")
   );
   // Активный заказ — для чата с клиентом
-  const activeOrder = myOrders.find(o => ["assigned", "accepted", "in_progress"].includes(o.status));
+  const activeOrder = myOrders.find(o => ["assigned", "accepted", "arrived", "in_progress"].includes(o.status));
 
   const scale = incoming ? 0.75 + 0.25 * (secondsLeft / ACCEPT_SECONDS) : 1;
   const currentRole = ROLES.find(r => r.id === activeRole) || ROLES[0];
@@ -3153,19 +3210,43 @@ export default function App() {
                     </span>
                   </div>
 
+                  {/* Цепочка кнопок жизненного цикла: Принять (8 сек) →
+                      Я на месте → Начать поездку → Завершить */}
                   {o.status === "assigned" && (
-                    <button onClick={() => acceptAssigned(o.id)} style={s.primary}>Я на месте</button>
+                    <>
+                      <AcceptCountdown left={o.accept_seconds_left} />
+                      <button
+                        onClick={() => acceptAssigned(o.id)}
+                        style={{ ...s.primary, marginTop: o.accept_seconds_left != null ? 8 : 0 }}
+                      >Принять заказ</button>
+                      <button
+                        onClick={() => declineOrder(o.id)}
+                        style={{ ...s.ghostBtn, marginTop: 8, background: t.dangerSoft, color: t.danger }}
+                      >Отказаться</button>
+                    </>
                   )}
 
                   {o.status === "accepted" && (
-                    <button onClick={() => startOrder(o.id)} style={s.primary}>Начать поездку</button>
+                    <>
+                      <button onClick={() => arriveOrder(o.id)} style={s.primary}>Я на месте</button>
+                      <button
+                        onClick={() => declineOrder(o.id)}
+                        style={{ ...s.ghostBtn, marginTop: 8, background: t.dangerSoft, color: t.danger }}
+                      >Отказаться</button>
+                    </>
+                  )}
+
+                  {o.status === "arrived" && (
+                    <button onClick={() => startOrder(o.id)} style={s.primary}>
+                      Начать поездку — первые 2 мин ожидания бесплатны
+                    </button>
                   )}
 
                   {o.status === "in_progress" && (
                     <button onClick={() => complete(o.id)} style={s.primary}>Завершить заказ</button>
                   )}
 
-                  {["assigned", "accepted", "in_progress"].includes(o.status) && (
+                  {["assigned", "accepted", "arrived", "in_progress"].includes(o.status) && (
                     <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
                       <strong style={{ fontSize: 13, color: t.text }}>Добавить допуслугу</strong>
 

@@ -95,7 +95,7 @@ class ExecutorBalanceOp(Base):
 
     id=Column(Integer,primary_key=True)
     executor_id=Column(Integer,index=True,nullable=False)
-    type=Column(String,nullable=False,default="earning")  # earning, topup, correction
+    type=Column(String,nullable=False,default="earning")  # earning, topup, correction, commission
     amount=Column(Float,nullable=False,default=0)
     order_id=Column(Integer,nullable=True)
     comment=Column(String,nullable=True)

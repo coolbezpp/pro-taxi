@@ -28,6 +28,7 @@ const STATUS_NAMES = {
   created: "Создан",
   assigned: "Назначен исполнитель",
   accepted: "Исполнитель едет к вам",
+  arrived: "Исполнитель на месте",
   in_progress: "Выполняется",
   completed: "Завершён",
 };
@@ -195,7 +196,7 @@ export function ActiveOrderCard({ fallback = null }) {
             </button>
           )}
 
-          {["created", "accepted"].includes(order.status) && (
+          {["created", "chain_reserved", "assigned", "accepted", "arrived"].includes(order.status) && (
             <button
               onClick={async () => {
                 if (!confirm("Отменить заказ?")) return;

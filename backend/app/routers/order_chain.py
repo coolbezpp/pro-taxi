@@ -1,16 +1,32 @@
 from ..models import OrderEvent
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import Order, Executor, ExecutorRole, Client, Rating
+from ..security import bearer_scheme, get_current_executor
 from ..services.max_notify import send_max_message
 from ..services.selforder import self_order_blocked
-from .. import rating as rating_service
+from ..services import order_flow
+from .. import rating as rating_service, order_states, worktime, pricing
 
 router = APIRouter(tags=["order-chain"])
 
-ACTIVE = ["assigned", "accepted", "in_progress"]
+ACTIVE = list(order_states.ACTIVE_STATUSES)
+
+
+def _owning_executor(order_id, executor_id: int, credentials, db):
+    """Проверка: токен исполнителя, профиль совпадает и заказ назначен на него."""
+    executor = get_current_executor(credentials, db)
+    if executor.id != executor_id:
+        raise HTTPException(403, "Действие доступно только владельцу заказа")
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(404, "Заказ не найден")
+    if order.executor_id != executor.id:
+        raise HTTPException(403, "Заказ назначен другому исполнителю")
+    return order, executor
 
 
 def notify_client(db, order, text):
@@ -38,14 +54,13 @@ def reverse_match(current: Order, candidate: Order):
     )
 
 @router.get("/orders/{order_id}/chain")
-def chain_candidates(order_id: int, executor_id: int, db: Session = Depends(get_db)):
-    current = db.query(Order).filter(Order.id == order_id).first()
-    if not current:
-        raise HTTPException(404, "Заказ не найден")
-
-    executor = db.query(Executor).filter(Executor.id == executor_id).first()
-    if not executor:
-        raise HTTPException(404, "Исполнитель не найден")
+def chain_candidates(
+    order_id: int,
+    executor_id: int,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    current, _ = _owning_executor(order_id, executor_id, credentials, db)
 
     intercity = is_intercity(current)
 
@@ -83,11 +98,17 @@ def chain_candidates(order_id: int, executor_id: int, db: Session = Depends(get_
     }
 
 @router.post("/orders/{order_id}/chain/{next_order_id}/reserve")
-def reserve_chain(order_id: int, next_order_id: int, executor_id: int, db: Session = Depends(get_db)):
-    current = db.query(Order).filter(Order.id == order_id).first()
+def reserve_chain(
+    order_id: int,
+    next_order_id: int,
+    executor_id: int,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    current, executor = _owning_executor(order_id, executor_id, credentials, db)
     next_order = db.query(Order).filter(Order.id == next_order_id).first()
 
-    if not current or not next_order:
+    if not next_order:
         raise HTTPException(404, "Заказ не найден")
 
     if next_order.status != "created":
@@ -97,12 +118,11 @@ def reserve_chain(order_id: int, next_order_id: int, executor_id: int, db: Sessi
         raise HTTPException(400, "Для межгорода доступен только встречный заказ в обратном направлении")
 
     # Анти-самозаказы: свой заказ в цепочку тоже брать нельзя
-    executor = db.query(Executor).get(executor_id)
     so = self_order_blocked(db, next_order, executor)
     if so:
         raise HTTPException(403, so)
 
-    next_order.status = "chain_reserved"
+    order_flow.apply(db, next_order, "reserve_chain", "executor", executor.id)
     next_order.chain_reserved_order_id = current.id
     db.commit()
 
@@ -110,22 +130,22 @@ def reserve_chain(order_id: int, next_order_id: int, executor_id: int, db: Sessi
 
 
 @router.post("/orders/{order_id}/accept")
-def accept_order(order_id: int, executor_id: int, db: Session = Depends(get_db)):
-    order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(404, "Заказ не найден")
-    if order.executor_id != executor_id:
-        raise HTTPException(403, "Заказ назначен другому исполнителю")
-    if order.status != "assigned":
-        raise HTTPException(409, "Заказ нельзя принять в текущем статусе")
+def accept_order(
+    order_id: int,
+    executor_id: int,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """Исполнитель подтверждает, что выезжает к клиенту (назначенный заказ)."""
+    order, executor = _owning_executor(order_id, executor_id, credentials, db)
 
     # Временное отстранение: низкий рейтинг или решение администратора
-    susp = rating_service.active_suspension(db, executor_id)
+    susp = rating_service.active_suspension(db, executor.id)
     if susp:
         raise HTTPException(403, rating_service.suspension_notice(susp))
 
-    order.status = "accepted"
-    db.add(OrderEvent(order_id=order.id, event="accepted", payload={"executor_id": executor_id}))
+    order_flow.apply(db, order, "accept", "executor", executor.id)
+    worktime.touch_session(db, executor.id)
     db.commit()
     db.refresh(order)
     notify_client(db, order, f"Ваш заказ №{order.id} принят. Исполнитель направляется к вам.")
@@ -133,26 +153,41 @@ def accept_order(order_id: int, executor_id: int, db: Session = Depends(get_db))
 
 
 @router.post("/orders/{order_id}/start")
-def start_order(order_id: int, executor_id: int, db: Session = Depends(get_db)):
-    order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(404, "Заказ не найден")
-    if order.executor_id != executor_id:
-        raise HTTPException(403, "Заказ назначен другому исполнителю")
-    if order.status != "accepted":
-        raise HTTPException(409, "Сначала примите заказ")
+def start_order(
+    order_id: int,
+    executor_id: int,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """Начало поездки. Считает бесплатное ожидание: 2 минуты бесплатно
+    от отметки «Я на месте», дальше поминутно."""
+    order, executor = _owning_executor(order_id, executor_id, credentials, db)
 
-    order.status = "in_progress"
-    db.add(OrderEvent(order_id=order.id, event="started", payload={"executor_id": executor_id}))
+    minutes = order_flow.apply_waiting(db, order)
+    order_flow.apply(db, order, "start", "executor", executor.id)
+    worktime.touch_session(db, executor.id)
     db.commit()
     db.refresh(order)
     notify_client(db, order, f"Началась поездка по заказу №{order.id}.")
+    if minutes > 0:
+        notify_client(
+            db, order,
+            f"Ожидание: {minutes} мин, к оплате {order.waiting_price} ₽ "
+            f"(первые {pricing.FREE_WAITING_MINUTES} мин бесплатно).",
+        )
     return order
 
 
 @router.get("/orders/executor/{executor_id}")
 @router.get("/orders/driver/{executor_id}")  # legacy-URL старого миниаппа
-def executor_orders(executor_id: int, db: Session = Depends(get_db)):
+def executor_orders(
+    executor_id: int,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    executor = get_current_executor(credentials, db)
+    if executor.id != executor_id:
+        raise HTTPException(403, "Заказы доступны только владельцу профиля")
     query = db.query(Order).filter(Order.executor_id == executor_id)
     orders = query.order_by(Order.id.desc()).limit(100).all()
 
@@ -193,6 +228,9 @@ def executor_orders(executor_id: int, db: Session = Depends(get_db)):
         "client_rating": client_percents.get(o.client_id),
         "rated": o.id in my_ratings,
         "rated_value": my_ratings.get(o.id),
+        # Сколько секунд осталось принять заказ, назначенный оператором
+        # (None — таймера нет: взяли из ленты или цепочка)
+        "accept_seconds_left": order_flow.accept_seconds_left(db, o),
         "completed_at": (
             completed_map[o.id].isoformat() if completed_map.get(o.id) else None
         ),

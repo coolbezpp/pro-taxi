@@ -280,3 +280,17 @@ def get_current_executor(
     # Вход на новом телефоне аннулировал прошлую сессию
     ensure_executor_session(payload, executor)
     return executor
+
+
+def get_executor_or_staff(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    admin_session: str | None = Cookie(default=None),
+    operator_session: str | None = Cookie(default=None),
+    db=Depends(get_db),
+):
+    """Исполнитель по Bearer-токену или сотрудник по cookie админки.
+
+    Возвращает ("executor", Executor) или ("staff", принципал)."""
+    if credentials:
+        return "executor", get_current_executor(credentials, db)
+    return "staff", get_staff(admin_session, operator_session)
