@@ -72,6 +72,41 @@ def test_invalid_transitions():
     assert fails(st.CREATED, "teleport")
 
 
+def test_unknown_action_raises():
+    """Неизвестное действие -> ValueError с русским текстом."""
+    try:
+        st.next_status(st.CREATED, "teleport")
+    except ValueError as e:
+        assert "teleport" in str(e)
+    else:
+        raise AssertionError("неизвестное действие должно бросать ValueError")
+
+
+def test_every_allowed_transition():
+    """Тест на каждый разрешённый переход из TRANSITIONS."""
+    for action, (sources, target) in st.TRANSITIONS.items():
+        for src in sources:
+            assert st.next_status(src, action) == target, (action, src)
+
+
+def test_complete_from_assigned_forbidden():
+    """«Завершить» нельзя до поездки: assigned -> complete запрещён."""
+    try:
+        st.next_status(st.ASSIGNED, "complete")
+    except ValueError:
+        return
+    raise AssertionError("complete из assigned должен быть запрещён")
+
+
+def test_start_from_accepted_forbidden():
+    """«Начать поездку» можно только после «Я на месте»: accepted -> start запрещён."""
+    try:
+        st.next_status(st.ACCEPTED, "start")
+    except ValueError:
+        return
+    raise AssertionError("start из accepted должен быть запрещён")
+
+
 def test_client_cancel_window():
     """Клиент отменяет до начала поездки включительно, не во время неё."""
     for cur in (st.CREATED, st.CHAIN_RESERVED, st.ASSIGNED, st.ACCEPTED, st.ARRIVED):
@@ -92,8 +127,8 @@ def test_chain():
 
 
 def test_constants_match_release_plan():
-    """Параметры релиза: принятие 8 секунд, бесплатное ожидание 2 минуты."""
-    assert st.ASSIGNED_ACCEPT_SECONDS == 8
+    """Параметры релиза: принятие 60 секунд, бесплатное ожидание 2 минуты."""
+    assert st.ASSIGNED_ACCEPT_SECONDS == 60
     assert pricing.FREE_WAITING_MINUTES == 2
     assert st.ARRIVED in st.ACTIVE_STATUSES
     assert st.CREATED in st.CLIENT_ACTIVE_STATUSES

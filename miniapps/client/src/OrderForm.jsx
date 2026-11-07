@@ -20,9 +20,12 @@ export default function OrderForm({
   setTariff,
   intercityAt = "",
   setIntercityAt,
+  initialFrom = null,
+  initialTo = null,
 }) {
-  const [from, setFrom] = useState(null);
-  const [to, setTo] = useState(null);
+  // initialFrom/initialTo — префилл из «Заказать снова» (адреса прошлой поездки)
+  const [from, setFrom] = useState(initialFrom);
+  const [to, setTo] = useState(initialTo);
   const [active, setActive] = useState("from");
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState([]);
@@ -36,6 +39,15 @@ export default function OrderForm({
   const [busy, setBusy] = useState(false);
   const reqId = useRef(0);
   const [useMap, setUseMap] = useState(false); // режим выбора точек: карта ↔ ручной ввод
+
+  // Если форма уже открыта, а «Заказать снова» нажали в другой карточке —
+  // подхватываем новые адреса; маршрут и цена пересчитаются сами ниже
+  useEffect(() => {
+    if (initialFrom) setFrom(initialFrom);
+  }, [initialFrom]);
+  useEffect(() => {
+    if (initialTo) setTo(initialTo);
+  }, [initialTo]);
 
   // Геопозиция клиента — чтобы подсказки шли ближайшие к нему
   useEffect(() => {

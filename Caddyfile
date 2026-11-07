@@ -69,6 +69,9 @@ procityservice.ru {
     # Векторные тайлы своего OSM-стека (PMTiles, Range поддержан nginx)
     handle /tiles* {
         uri strip_prefix /tiles
+        # PMTiles immutable (версия в ETag, файл статичен) — переопределяем
+        # upstream-значение, иначе Caddy-сайт-блок оставлял max-age=3600 от nginx
+        header Cache-Control "public, max-age=31536000, immutable"
         reverse_proxy osm-tiles:80
     }
 

@@ -347,6 +347,9 @@ export default function App() {
   });
   const [order, setOrder] = useState(null);
   const [orders, setOrders] = useState([]);
+  // Префилл формы заказа (адреса прошлой поездки) — заполняется кнопкой
+  // «Заказать снова» и очищается после отправки/закрытия формы
+  const [orderDraft, setOrderDraft] = useState(null);
   const [extras, setExtras] = useState([]);
   const [cargoFrom, setCargoFrom] = useState("");
   const [cargoTo, setCargoTo] = useState("");
@@ -521,6 +524,8 @@ export default function App() {
       });
       setOrder(res);
       setOrders([res, ...orders]);
+      // черновик «Заказать снова» израсходован — следующий заказ открывается пустым
+      setOrderDraft(null);
       goPage("search");
     } catch (e) {
       setError(e.message || "Не удалось оформить заказ");
@@ -529,12 +534,18 @@ export default function App() {
     }
   }
 
-  async function cancelOrder() {
-    if (!order?.id) return;
+  // Отмена заказа клиентом: тело {reason} (штрафов нет — правило продукта).
+  // orderId позволяет отменять из списка/карточки, а не только текущий заказ.
+  async function cancelOrder(orderId, reason) {
+    const id = orderId || order?.id;
+    if (!id) return;
     try {
-      await api(`/orders/${order.id}/cancel`, { method: "POST" });
-      const fresh = await api(`/orders/${order.id}`);
-      setOrder(fresh);
+      await api(`/orders/${id}/cancel`, {
+        method: "POST",
+        body: reason ? { reason } : {},
+      });
+      const fresh = await api(`/orders/${id}`);
+      setOrder(prev => (prev && prev.id === fresh.id ? fresh : prev));
       setOrders(orders.map(o => (o.id === fresh.id ? fresh : o)));
     } catch (e) {
       setError(e.message || "Не удалось отменить заказ");
@@ -720,6 +731,21 @@ export default function App() {
   function continueOrder(o) {
     setOrder(o);
     goPage("search");
+  }
+
+  // «Заказать снова»: подставляем адреса прошлой поездки в форму такси
+  function orderAgain(o) {
+    if (!o || o.from_lat == null || o.to_lat == null) {
+      // без координат пересчитать маршрут не получим — открываем пустую форму
+      setOrderDraft(null);
+      goPage("taxi");
+      return;
+    }
+    setOrderDraft({
+      from: { title: o.from_address, lat: o.from_lat, lon: o.from_lon },
+      to: { title: o.to_address, lat: o.to_lat, lon: o.to_lon },
+    });
+    goPage("taxi");
   }
 
   const summaryData = useAppSummary();
@@ -927,7 +953,9 @@ export default function App() {
           setTariff={setTariff}
           intercityAt={intercityAt}
           setIntercityAt={setIntercityAt}
-          onClose={() => { setError(""); if (nav.stack.length) backPage(); else resetPage("home"); }}
+          initialFrom={orderDraft?.from || null}
+          initialTo={orderDraft?.to || null}
+          onClose={() => { setError(""); setOrderDraft(null); if (nav.stack.length) backPage(); else resetPage("home"); }}
         />
       )}
 
@@ -947,6 +975,7 @@ export default function App() {
           orders={orders} order={order} extras={extras}
           onIncrease={increase} onDecide={decideExtra}
           onToggleFavorite={toggleFavorite} onContinue={continueOrder}
+          onAgain={orderAgain}
           onOpen={o => setDetailOrderId(o.id)}
         />
       )}
@@ -1256,7 +1285,7 @@ function CityPage({ s, t, city, setCity }) {
   );
 }
 
-function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggleFavorite, onContinue, onOpen }) {
+function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggleFavorite, onContinue, onAgain, onOpen }) {
   return (
     <div style={{ padding: "18px 16px 24px" }}>
       <h1 style={s.pageTitle}>Мои заказы</h1>
@@ -1324,6 +1353,13 @@ function OrdersPage({ s, t, orders, order, extras, onIncrease, onDecide, onToggl
               {isActive && (
                 <button onClick={e => { e.stopPropagation(); onContinue(o); }} style={{ ...s.btnBlue, marginTop: 12 }}>
                   Продолжить — следить за заказом
+                </button>
+              )}
+
+              {/* Повтор поездки: адреса подставляются в форму заказа */}
+              {(isCancel || isDone) && (
+                <button onClick={e => { e.stopPropagation(); onAgain(o); }} style={{ ...s.btnBlue, marginTop: 12 }}>
+                  Заказать снова
                 </button>
               )}
 

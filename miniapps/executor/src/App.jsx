@@ -2023,7 +2023,7 @@ const STATUS_RU = {
   created: "Новый",
   assigned: "Назначен вам",
   accepted: "Едете к клиенту",
-  arrived: "Вы на месте",
+  arrived: "На месте",
   in_progress: "Выполняется",
   completed: "Завершён",
   cancelled: "Отменён",
@@ -2144,6 +2144,9 @@ export default function App() {
   const [extraPrice, setExtraPrice] = useState("");
   const [secondsLeft, setSecondsLeft] = useState(ACCEPT_SECONDS);
   const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  const [declineFor, setDeclineFor] = useState(null);
+  const [declineReason, setDeclineReason] = useState("");
   const [earnings, setEarnings] = useState(null);
   const timerRef = useRef(null);
 
@@ -2733,10 +2736,13 @@ export default function App() {
   async function acceptAssigned(orderId) {
     try {
       setError("");
-      await api(`/orders/${orderId}/accept?executor_id=${me.id}`, { method: "POST" });
+      setBusyId(orderId);
+      await api(`/orders/${orderId}/accept`, { method: "POST" });
       await loadMyOrders();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -2744,10 +2750,13 @@ export default function App() {
   async function arriveOrder(orderId) {
     try {
       setError("");
+      setBusyId(orderId);
       await api(`/orders/${orderId}/arrived`, { method: "POST" });
       await loadMyOrders();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -2756,21 +2765,47 @@ export default function App() {
     if (!confirm("Отказаться от заказа? Он вернётся в общий пул, штрафа нет.")) return;
     try {
       setError("");
+      setBusyId(orderId);
       await api(`/orders/${orderId}/decline`, { method: "POST" });
       await loadMyOrders();
       loadOrders();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Отказ с причиной (принят/на месте): POST /orders/{id}/executor-cancel
+  async function confirmExecutorCancel(orderId) {
+    try {
+      setError("");
+      setBusyId(orderId);
+      await api(`/orders/${orderId}/executor-cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason: declineReason }),
+      });
+      setDeclineFor(null);
+      setDeclineReason("");
+      await loadMyOrders();
+      loadOrders();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusyId(null);
     }
   }
 
   async function startOrder(orderId) {
     try {
       setError("");
-      await api(`/orders/${orderId}/start?executor_id=${me.id}`, { method: "POST" });
+      setBusyId(orderId);
+      await api(`/orders/${orderId}/start`, { method: "POST" });
       await loadMyOrders();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -2815,11 +2850,15 @@ export default function App() {
 
   async function complete(id) {
     try {
+      setError("");
+      setBusyId(id);
       await api(`/orders/${id}/complete`, { method: "POST" });
       await loadMyOrders();
       loadEarnings();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -3210,17 +3249,18 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* Цепочка кнопок жизненного цикла: Принять (8 сек) →
-                      Я на месте → Начать поездку → Завершить */}
+                  {/* Одна главная кнопка по статусу + вторичный отказ */}
                   {o.status === "assigned" && (
                     <>
                       <AcceptCountdown left={o.accept_seconds_left} />
                       <button
                         onClick={() => acceptAssigned(o.id)}
-                        style={{ ...s.primary, marginTop: o.accept_seconds_left != null ? 8 : 0 }}
-                      >Принять заказ</button>
+                        disabled={busyId === o.id}
+                        style={{ ...s.primary, marginTop: o.accept_seconds_left != null ? 8 : 0, opacity: busyId === o.id ? 0.6 : 1 }}
+                      >Принять</button>
                       <button
                         onClick={() => declineOrder(o.id)}
+                        disabled={busyId === o.id}
                         style={{ ...s.ghostBtn, marginTop: 8, background: t.dangerSoft, color: t.danger }}
                       >Отказаться</button>
                     </>
@@ -3228,22 +3268,28 @@ export default function App() {
 
                   {o.status === "accepted" && (
                     <>
-                      <button onClick={() => arriveOrder(o.id)} style={s.primary}>Я на месте</button>
+                      <button onClick={() => arriveOrder(o.id)} disabled={busyId === o.id} style={s.primary}>Я на месте</button>
                       <button
-                        onClick={() => declineOrder(o.id)}
+                        onClick={() => setDeclineFor(o.id)}
+                        disabled={busyId === o.id}
                         style={{ ...s.ghostBtn, marginTop: 8, background: t.dangerSoft, color: t.danger }}
-                      >Отказаться</button>
+                      >Отказаться от заказа</button>
                     </>
                   )}
 
                   {o.status === "arrived" && (
-                    <button onClick={() => startOrder(o.id)} style={s.primary}>
-                      Начать поездку — первые 2 мин ожидания бесплатны
-                    </button>
+                    <>
+                      <button onClick={() => startOrder(o.id)} disabled={busyId === o.id} style={s.primary}>Начать поездку</button>
+                      <button
+                        onClick={() => setDeclineFor(o.id)}
+                        disabled={busyId === o.id}
+                        style={{ ...s.ghostBtn, marginTop: 8, background: t.dangerSoft, color: t.danger }}
+                      >Отказаться от заказа</button>
+                    </>
                   )}
 
                   {o.status === "in_progress" && (
-                    <button onClick={() => complete(o.id)} style={s.primary}>Завершить заказ</button>
+                    <button onClick={() => complete(o.id)} disabled={busyId === o.id} style={s.primary}>Завершить</button>
                   )}
 
                   {["assigned", "accepted", "arrived", "in_progress"].includes(o.status) && (

@@ -33,6 +33,14 @@ const STATUS_NAMES = {
   completed: "Завершён",
 };
 
+// Причины отмены заказа от клиента (выбор в модалке)
+const CANCEL_REASONS = [
+  { id: "long", label: "Долго ждать" },
+  { id: "plans", label: "Изменились планы" },
+  { id: "address", label: "Ошибся адресом" },
+  { id: "other", label: "Другое" },
+];
+
 function MiniIcon({ path, size = 18, style }) {
   return (
     <svg
@@ -117,6 +125,11 @@ export function ActiveOrderCard({ fallback = null }) {
   const [summary] = useSummary();
   const { t } = useTheme();
   const order = summary?.active_order;
+  const [busy, setBusy] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelCustom, setCancelCustom] = useState("");
+  const [cancelledReason, setCancelledReason] = useState(null);
 
   if (!order) return fallback ?? null;
 
@@ -196,21 +209,9 @@ export function ActiveOrderCard({ fallback = null }) {
             </button>
           )}
 
-          {["created", "chain_reserved", "assigned", "accepted", "arrived"].includes(order.status) && (
+          {["created", "assigned", "accepted", "arrived"].includes(order.status) && (
             <button
-              onClick={async () => {
-                if (!confirm("Отменить заказ?")) return;
-                setBusy(true);
-                try {
-                  await api(`/orders/${order.id}/cancel`, { method: "POST" });
-                  alert("Заказ отменён");
-                } catch (e) {
-                  alert(e.message || "Не удалось отменить заказ");
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              disabled={busy}
+              onClick={() => setCancelOpen(true)}
               style={{
                 width: "100%",
                 marginTop: 10,
@@ -223,8 +224,76 @@ export function ActiveOrderCard({ fallback = null }) {
                 cursor: "pointer",
               }}
             >
-              {busy ? "Отмена…" : "Отменить заказ"}
+              Отменить заказ
             </button>
+          )}
+
+          {cancelledReason && (
+            <p style={{ margin: "10px 0 0", fontSize: 12.5, color: t.sub, lineHeight: 1.35 }}>
+              Причина отмены: {cancelledReason}
+            </p>
+          )}
+
+          {cancelOpen && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(20,18,40,.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }}>
+              <div style={{ width: "88%", maxWidth: 360, padding: 16, borderRadius: 16, background: t.card, border: `1px solid ${t.border}`, color: t.text }}>
+                <strong style={{ color: t.text }}>Отменить заказ?</strong>
+                <p style={{ color: t.sub, fontSize: 12.5, margin: "6px 0 10px" }}>Причина уйдёт клиенту и исполнителю; штрафа нет.</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {CANCEL_REASONS.map(r => (
+                    <button
+                      key={r.id}
+                      onClick={() => { setCancelReason(r.id); if (r.id !== "other") setCancelOpen(false); }}
+                      style={{
+                        padding: 12, borderRadius: 12, border: `1px solid ${cancelReason === r.id ? t.accent : t.border}`,
+                        background: cancelReason === r.id ? t.accentSoft : t.card,
+                        color: cancelReason === r.id ? t.accent : t.text,
+                        fontWeight: 750, fontSize: 13.5, fontFamily: "inherit", cursor: "pointer",
+                      }}
+                    >{r.label}</button>
+                  ))}
+                </div>
+                {cancelReason === "other" && (
+                  <input
+                    value={cancelCustom}
+                    onChange={e => setCancelCustom(e.target.value)}
+                    placeholder="Укажите причину"
+                    style={{
+                      width: "100%", marginTop: 8, padding: 12, borderRadius: 12, border: `1px solid ${t.border}`,
+                      background: t.inputBg, color: t.text, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box",
+                    }}
+                  />
+                )}
+                <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                  <button
+                    onClick={() => { setCancelOpen(false); setCancelReason(""); setCancelCustom(""); }}
+                    style={{ flex: 1, padding: 12, borderRadius: 12, border: 0, background: t.card, color: t.sub, fontWeight: 750, cursor: "pointer" }}
+                  >Отмена</button>
+                  <button
+                    onClick={async () => {
+                      const chosen = CANCEL_REASONS.find(r => r.id === cancelReason);
+                      const reason = cancelReason === "other" ? cancelCustom.trim() : (chosen ? chosen.label : "");
+                      if (!reason) return;
+                      setBusy(true);
+                      try {
+                        const res = await api(`/orders/${order.id}/cancel`, { method: "POST", body: { reason } });
+                        setCancelOpen(false);
+                        setCancelReason("");
+                        setCancelCustom("");
+                        setCancelledReason(res?.cancel_reason || reason);
+                        alert("Заказ отменён");
+                      } catch (e) {
+                        alert(e.message || "Не удалось отменить заказ");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    disabled={busy || !cancelReason}
+                    style={{ flex: 2, padding: 12, borderRadius: 12, border: 0, background: t.danger, color: "#fff", fontWeight: 800, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+                  >{busy ? "Отмена…" : "Отменить"}</button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}

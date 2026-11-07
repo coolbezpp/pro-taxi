@@ -16,10 +16,12 @@ router = APIRouter(tags=["order-chain"])
 ACTIVE = list(order_states.ACTIVE_STATUSES)
 
 
-def _owning_executor(order_id, executor_id: int, credentials, db):
-    """Проверка: токен исполнителя, профиль совпадает и заказ назначен на него."""
+def _owning_executor(order_id, executor_id: int | None, credentials, db):
+    """Проверка: токен исполнителя, профиль совпадает и заказ назначен на него.
+
+    executor_id=None — параметр не передан (он необязательный), проверяем только токен."""
     executor = get_current_executor(credentials, db)
-    if executor.id != executor_id:
+    if executor_id is not None and executor.id != executor_id:
         raise HTTPException(403, "Действие доступно только владельцу заказа")
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
@@ -132,7 +134,7 @@ def reserve_chain(
 @router.post("/orders/{order_id}/accept")
 def accept_order(
     order_id: int,
-    executor_id: int,
+    executor_id: int | None = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ):
@@ -152,10 +154,31 @@ def accept_order(
     return order
 
 
+@router.post("/orders/{order_id}/arrive")
+def arrive_order(
+    order_id: int,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """Исполнитель приехал на точку подачи — стартует бесплатное ожидание."""
+    order, executor = _owning_executor(order_id, None, credentials, db)
+
+    order_flow.apply(db, order, "arrive", "executor", executor.id)
+    worktime.touch_session(db, executor.id)
+    db.commit()
+    db.refresh(order)
+    notify_client(
+        db, order,
+        f"Исполнитель на месте по заказу №{order.id}. "
+        f"Первые {pricing.FREE_WAITING_MINUTES} минут ожидания бесплатны.",
+    )
+    return order
+
+
 @router.post("/orders/{order_id}/start")
 def start_order(
     order_id: int,
-    executor_id: int,
+    executor_id: int | None = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ):

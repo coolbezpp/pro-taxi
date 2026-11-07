@@ -42,9 +42,8 @@ def apply(db, order, action, actor, actor_id=None, payload=None):
         order.executor_id = None
     if action == "release_chain":
         order.chain_reserved_order_id = None
-    data = {"actor": actor}
-    if actor_id is not None:
-        data["actor_id"] = actor_id
+    # actor_id пишем всегда (даже None): форма payload события единая
+    data = {"actor": actor, "actor_id": actor_id}
     if payload:
         data.update(payload)
     db.add(models.OrderEvent(order_id=order.id, event=EVENT_NAMES[action], payload=data))

@@ -381,6 +381,34 @@ const STATUS_COLORS = {
   cancelled: { background: "#ffe9ec", color: "#d92b45" },
 };
 
+// Дата из админ-API: бэкенд отдаёт наивный UTC (datetime.utcnow),
+// помечаем Z, иначе браузер прочитает её как местное время
+// и «возраст» GPS уедет на разницу часовых поясов.
+function utcDate(iso) {
+  if (!iso) return null;
+  const s = String(iso);
+  const hasZone = /(?:Z|z|[+-]\d{2}:?\d{2})$/.test(s);
+  const d = new Date(hasZone ? s : s + "Z");
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// События заказа (OrderEvent) — подписи для блока «История» в карточке заказа
+const EVENT_LABELS = {
+  created: "Создан",
+  assigned: "Назначен",
+  accepted: "Принят",
+  arrived: "На месте",
+  started: "Поездка началась",
+  completed: "Завершён",
+  cancelled: "Отменён",
+  executor_cancelled: "Исполнитель отказался",
+  declined: "Не принят исполнителем",
+  chain_activated: "Цепочка активирована",
+  chain_reserved: "Заказ зарезервирован в цепочке",
+  chain_released: "Резерв цепочки снят",
+  lost_item: "Заявка о потере вещи",
+};
+
 const SERVICE_LABELS = {
   taxi: "Такси",
   courier: "Курьер",
@@ -417,6 +445,12 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [clock, setClock] = useState("");
   const [expandedOrder, setExpandedOrder] = useState(null);
+  // История заказа: события OrderEvent по id заказа + состояние загрузки
+  const [orderEvents, setOrderEvents] = useState({});
+  const [eventsLoading, setEventsLoading] = useState(null);
+  // Отмена заказа оператором: причина по id заказа + состояние кнопки
+  const [cancelPick, setCancelPick] = useState({});
+  const [cancelling, setCancelling] = useState(null);
   // Диспетчеризация: выбранный исполнитель по каждому заказу
   const [assignPick, setAssignPick] = useState({});
   const [assigning, setAssigning] = useState(null);
@@ -677,6 +711,54 @@ export default function App() {
       setError(e.message || "Не удалось назначить исполнителя");
     } finally {
       setAssigning(null);
+    }
+  }
+
+  // История заказа: события OrderEvent для блока «История» в карточке
+  async function loadOrderEvents(orderId) {
+    setEventsLoading(orderId);
+    try {
+      const res = await fetch(`${API}/admin/orders/${orderId}/events`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => null);
+      setOrderEvents(prev => ({
+        ...prev,
+        [orderId]: res.ok && Array.isArray(data) ? data : [],
+      }));
+    } catch (e) {
+      setOrderEvents(prev => ({ ...prev, [orderId]: [] }));
+    } finally {
+      setEventsLoading(null);
+    }
+  }
+
+  // Оператор отменяет заказ: причина обязательна, штрафов по продукту нет
+  async function cancelOrder(orderId) {
+    const reason = (cancelPick[orderId] || "").trim();
+    if (!reason) return;
+    setCancelling(orderId);
+    setError("");
+    try {
+      const res = await fetch(`${API}/admin/orders/${orderId}/cancel`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.detail || "Не удалось отменить заказ");
+      } else {
+        setCancelPick(p => ({ ...p, [orderId]: "" }));
+      }
+      await loadOrders();
+      // история перечитывается: в ленте появляется событие «Отменён» с причиной
+      await loadOrderEvents(orderId);
+    } catch (e) {
+      setError(e.message || "Не удалось отменить заказ");
+    } finally {
+      setCancelling(null);
     }
   }
 
@@ -1767,7 +1849,12 @@ export default function App() {
                   </div>
 
                   <button
-                    onClick={() => setExpandedOrder(open ? null : o.id)}
+                    onClick={() => {
+                      const next = open ? null : o.id;
+                      setExpandedOrder(next);
+                      // при открытии карточки подгружаем историю заказа
+                      if (next) loadOrderEvents(next);
+                    }}
                     style={{
                       marginTop: 12, background: "transparent", border: 0,
                       color: PURPLE, fontWeight: 750, fontSize: 14,
@@ -1800,6 +1887,67 @@ export default function App() {
                           <strong style={{ marginLeft: "auto", textAlign: "right" }}>{value}</strong>
                         </div>
                       ))}
+
+                      {/* История заказа: события в хронологическом порядке */}
+                      <div style={{ marginTop: 14 }}>
+                        <div style={{ fontSize: 13, fontWeight: 750, color: "#55526a", marginBottom: 6 }}>
+                          История
+                        </div>
+                        {eventsLoading === o.id && (
+                          <p style={{ fontSize: 12.5, color: "#77748a", margin: "4px 0 0" }}>Загружаем…</p>
+                        )}
+                        {eventsLoading !== o.id && (orderEvents[o.id] || []).length === 0 && (
+                          <p style={{ fontSize: 12.5, color: "#77748a", margin: "4px 0 0" }}>Событий пока нет</p>
+                        )}
+                        {(orderEvents[o.id] || []).map((ev, i) => (
+                          <div
+                            key={`${ev.event}-${i}`}
+                            style={{
+                              display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap",
+                              padding: "7px 0", borderBottom: "1px solid #f2f2f7", fontSize: 13.5,
+                            }}
+                          >
+                            <span style={{ color: "#55526a", fontWeight: 750 }}>
+                              {EVENT_LABELS[ev.event] || ev.event}
+                            </span>
+                            {ev.payload && ev.payload.reason ? (
+                              <span style={{ color: "#77748a" }}>— {ev.payload.reason}</span>
+                            ) : null}
+                            <span style={{ marginLeft: "auto", color: "#9b98ab", fontSize: 12 }}>
+                              {ev.created_at ? new Date(ev.created_at).toLocaleString("ru-RU") : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Отмена заказа оператором: причина обязательна */}
+                      {["created", "chain_reserved", "assigned", "accepted", "arrived", "in_progress"].includes(o.status) && (
+                        <div style={{ marginTop: 14 }}>
+                          <div style={{ fontSize: 13, fontWeight: 750, color: "#55526a", marginBottom: 6 }}>
+                            Отменить заказ
+                          </div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <input
+                              value={cancelPick[o.id] || ""}
+                              onChange={e => setCancelPick(p => ({ ...p, [o.id]: e.target.value }))}
+                              placeholder="Причина отмены (обязательно)"
+                              style={{ ...input, flex: 1, marginTop: 0, marginBottom: 0 }}
+                            />
+                            <button
+                              onClick={() => cancelOrder(o.id)}
+                              disabled={!(cancelPick[o.id] || "").trim() || cancelling === o.id}
+                              style={{
+                                ...button, marginTop: 0, marginBottom: 0, flexShrink: 0,
+                                background: "#ffe9ec", color: "#d92b45",
+                                border: "1px solid #f6c2cd",
+                                opacity: !(cancelPick[o.id] || "").trim() || cancelling === o.id ? 0.55 : 1,
+                              }}
+                            >
+                              {cancelling === o.id ? "Отменяем…" : "Отменить заказ"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Диспетчеризация: назначение на несоставленный заказ */}
                       {o.status === "created" && (() => {
@@ -2000,6 +2148,27 @@ export default function App() {
                   }}>
                     {e.is_online ? "На линии" : "Не на линии"}
                   </span>
+                  {/* GPS-свежесть для исполнителей на линии: зелёный ≤15 с,
+                      жёлтый ≤60 с, дальше красный «нет GPS» (только отображение) */}
+                  {e.is_online && (() => {
+                    const seen = utcDate(e.last_seen_at);
+                    const ageSec = seen ? Math.max(0, Math.round((Date.now() - seen.getTime()) / 1000)) : null;
+                    const fresh = ageSec !== null && ageSec <= 15;
+                    const warm = ageSec !== null && ageSec <= 60;
+                    return (
+                      <span style={{
+                        marginLeft: 8,
+                        ...(fresh
+                          ? { background: "#e6f7ed", color: "#177e46" }
+                          : warm
+                            ? { background: "#fff4e5", color: "#b45309" }
+                            : { background: "#ffe9ec", color: "#d92b45" }),
+                        padding: "5px 11px", borderRadius: 999, fontSize: 12, fontWeight: 800,
+                      }}>
+                        {warm ? `GPS: ${ageSec} с назад` : "нет GPS"}
+                      </span>
+                    );
+                  })()}
                   {e.skip_streak > 0 && (
                     <span style={{
                       marginLeft: 8, background: "#ffe9ec", color: "#d92b45",

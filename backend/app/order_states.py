@@ -18,14 +18,14 @@ ACTIVE_STATUSES = (ASSIGNED, ACCEPTED, ARRIVED, IN_PROGRESS)
 CLIENT_ACTIVE_STATUSES = (CREATED, CHAIN_RESERVED) + ACTIVE_STATUSES
 
 # Время исполнителю на принятие заказа (и в ленте, и назначенного оператором)
-ASSIGNED_ACCEPT_SECONDS = 8
+ASSIGNED_ACCEPT_SECONDS = 60
 # Заказ без исполнителя закрывается через столько минут ожидания
 ORDER_STALE_MINUTES = 5
 
 # действие -> (статусы, из которых можно, новый статус)
 TRANSITIONS = {
     "take": ({CREATED}, ACCEPTED),                    # исполнитель взял из ленты
-    "assign": ({CREATED}, ASSIGNED),                  # назначил оператор
+    "assign": ({CREATED, CHAIN_RESERVED}, ASSIGNED),  # назначил оператор
     "accept": ({ASSIGNED}, ACCEPTED),
     "decline": ({ASSIGNED}, CREATED),                 # отказ или таймаут принятия
     "arrive": ({ACCEPTED}, ARRIVED),
@@ -79,6 +79,6 @@ def next_status(current: str, action: str) -> str:
     allowed, target = TRANSITIONS[action]
     if current not in allowed:
         raise ValueError(
-            f"Нельзя «{ACTION_RU[action]}» в статусе «{STATUS_RU.get(current, current)}»"
+            f"Нельзя «{ACTION_RU[action]}» из статуса «{STATUS_RU.get(current, current)}»"
         )
     return target

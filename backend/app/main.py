@@ -1,5 +1,6 @@
 import os
 import hashlib
+import logging
 from fastapi import Cookie, Response
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +14,7 @@ from app.security import (
     create_token, hash_password, verify_password, get_current_user, get_staff,
     get_current_executor, get_executor_or_staff, bearer_scheme,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 app=FastAPI(title="Pro API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 import csv
@@ -661,6 +662,12 @@ def _order_payload(db, o):
         models.OrderEvent.order_id == o.id,
         models.OrderEvent.event == "lost_item",
     ).first() is not None
+    # Причина отмены — из последнего события cancelled/executor_cancelled
+    cancel_ev = db.query(models.OrderEvent).filter(
+        models.OrderEvent.order_id == o.id,
+        models.OrderEvent.event.in_(["cancelled", "executor_cancelled"]),
+    ).order_by(models.OrderEvent.id.desc()).first()
+    payload["cancel_reason"] = (cancel_ev.payload or {}).get("reason") if cancel_ev else None
     return payload
 
 
@@ -1602,8 +1609,18 @@ def me_summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
     }
 
 
+class CancelIn(BaseModel):
+    # Необязательная причина отмены клиентом — до 300 символов
+    reason: str | None = Field(default=None, max_length=300)
+
+
 @app.post("/api/orders/{order_id}/cancel")
-def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = Depends(get_db)):
+def cancel_order(
+    order_id: int,
+    data: CancelIn | None = None,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
 
     if not order:
@@ -1625,7 +1642,8 @@ def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = De
         raise HTTPException(400, "Этот заказ уже нельзя отменить")
 
     executor_id = order.executor_id
-    order_flow.apply(db, order, "client_cancel", "client")
+    reason = data.reason if data else None
+    order_flow.apply(db, order, "client_cancel", "client", payload={"reason": reason})
     # Отмена брони — следующий заказ цепочки возвращается в ленту
     order_flow.release_chain(db, order, "client")
     db.commit()
@@ -1705,6 +1723,88 @@ def order_decline(order_id: int, credentials=Depends(bearer_scheme), db: Session
     return o
 
 
+class ExecutorCancelIn(BaseModel):
+    reason: str  # причина отказа обязательна
+
+
+@app.post("/api/orders/{order_id}/executor-cancel")
+def order_executor_cancel(
+    order_id: int,
+    data: ExecutorCancelIn,
+    credentials=Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """Исполнитель отказался от принятого заказа — тот возвращается в ленту."""
+    executor = get_current_executor(credentials, db)
+    o = _executor_order(db, order_id, executor)
+    order_flow.apply(db, o, "executor_cancel", "executor", executor.id, {"reason": data.reason})
+    # Пропуск засчитывается как в skip_order: статистика, без штрафов
+    executor.skip_streak = int(executor.skip_streak or 0) + 1
+    if o.client_id:
+        client = db.query(models.Client).get(o.client_id)
+        if client:
+            text = f"Исполнитель отказался от заказа №{o.id}, ищем другого"
+            db.add(models.Notification(
+                user_max_id=str(client.max_id),
+                title="Заказ возвращён в поиск",
+                body=text,
+                order_id=o.id,
+                category="order",
+            ))
+            send_max_message(client.max_id, text, bot="client")
+    db.commit()
+    db.refresh(o)
+    return o
+
+
+class StaffCancelIn(BaseModel):
+    reason: str  # причина отмены обязательна
+
+
+@app.post("/api/admin/orders/{order_id}/cancel")
+def admin_cancel_order(
+    order_id: int,
+    data: StaffCancelIn,
+    staff=Depends(get_staff),
+    db: Session = Depends(get_db),
+):
+    """Оператор отменяет заказ; клиент и исполнитель (если есть) уведомлены."""
+    o = db.query(models.Order).filter(models.Order.id == order_id).with_for_update().first()
+    if not o:
+        raise HTTPException(404, "Заказ не найден")
+    order_flow.apply(
+        db, o, "staff_cancel", "staff", staff.get("operator_id"),
+        {"reason": data.reason},
+    )
+    if o.client_id:
+        client = db.query(models.Client).get(o.client_id)
+        if client:
+            text = f"Оператор отменил заказ №{o.id}: {data.reason}"
+            db.add(models.Notification(
+                user_max_id=str(client.max_id),
+                title="Заказ отменён",
+                body=text,
+                order_id=o.id,
+                category="order",
+            ))
+            send_max_message(client.max_id, text, bot="client")
+    if o.executor_id:
+        executor = db.query(models.Executor).get(o.executor_id)
+        if executor:
+            text = f"Заказ №{o.id} отменён оператором: {data.reason}"
+            db.add(models.Notification(
+                user_max_id=str(executor.max_id),
+                title="Заказ отменён",
+                body=text,
+                order_id=o.id,
+                category="order",
+            ))
+            send_max_message(executor.max_id, text, bot="executor")
+    db.commit()
+    db.refresh(o)
+    return o
+
+
 @app.get("/api/executor/available-orders")
 def executor_available_orders(
     service: str | None = None,
@@ -1742,6 +1842,38 @@ def executor_available_orders(
         "total_price": round(o.total_price or 0),
         "status": o.status,
     } for o in orders]}
+
+
+@app.get("/api/admin/orders/{order_id}/events")
+def admin_order_events(
+    order_id: int,
+    staff=Depends(get_staff),
+    db: Session=Depends(get_db),
+):
+    """История заказа для админки: события OrderEvent в хронологическом порядке.
+
+    Отдаёт тип события, payload (причина отмены, актор, комиссия и т.п.)
+    и время в ISO — админка строит из этого ленту по жизни заказа.
+    """
+    if not db.query(models.Order).filter(models.Order.id == order_id).first():
+        raise HTTPException(404, "Заказ не найден")
+
+    rows = (
+        db.query(models.OrderEvent)
+        .filter(models.OrderEvent.order_id == order_id)
+        .order_by(models.OrderEvent.created_at.asc(), models.OrderEvent.id.asc())
+        .all()
+    )
+    return [
+        {
+            "event": r.event,
+            "payload": r.payload or {},
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
 @app.get("/api/admin/orders")
 def admin_orders(
     status: str | None = None,
@@ -2843,7 +2975,9 @@ async def _order_timeout_watcher():
     """
     import asyncio as _a
     from app.services.max_notify import send_max_message
+    logger = logging.getLogger(__name__)
     while True:
+        db = None
         try:
             db = SessionLocal()
             now = datetime.utcnow()
@@ -2862,16 +2996,15 @@ async def _order_timeout_watcher():
                 if left is None or left > 0:
                     continue
                 executor_id = o.executor_id
-                order_flow.apply(db, o, "decline", "timeout", executor_id,
-                                 {"reason": "не принят за "
-                                            f"{order_states.ASSIGNED_ACCEPT_SECONDS} сек"})
-                db.commit()
+                order_flow.apply(db, o, "decline", "timeout", executor_id, {"reason": "timeout"})
                 try:
                     if executor_id:
                         executor = db.query(models.Executor).filter(
                             models.Executor.id == executor_id
                         ).first()
                         if executor:
+                            # Пропуск исполнителю засчитываем, как в skip_order
+                            executor.skip_streak = int(executor.skip_streak or 0) + 1
                             send_max_message(
                                 executor.max_id,
                                 f"Заказ №{o.id} снова в общем пуле: вы не приняли его "
@@ -2880,6 +3013,7 @@ async def _order_timeout_watcher():
                             )
                 except Exception:
                     pass
+                db.commit()
 
             # 2. Заказ без исполнителя «висит» слишком долго
             stale = (
@@ -2897,7 +3031,8 @@ async def _order_timeout_watcher():
                     scheduled = scheduled.replace(tzinfo=None)
                 if scheduled and scheduled > now:
                     continue
-                waiting_from = order_flow.waiting_since(db, o, now)
+                # Время отсчёта: для предзаказа — scheduled_at, иначе waiting_since
+                waiting_from = scheduled if scheduled else order_flow.waiting_since(db, o, now)
                 if (now - waiting_from).total_seconds() < ORDER_STALE_MINUTES * 60:
                     continue
                 order_flow.apply(db, o, "timeout", "system", None,
@@ -2915,10 +3050,12 @@ async def _order_timeout_watcher():
                             )
                 except Exception:
                     pass
-            db.close()
         except Exception:
-            pass
-        # Опрос чаще секунды не нужен: таймер принятия — 8 секунд
+            logger.exception("order_timeout_watcher: ошибка при проверке таймаутов заказов")
+        finally:
+            if db is not None:
+                db.close()
+        # Опрос чаще секунды не нужен: таймер принятия — 60 секунд
         await _a.sleep(2)
 
 
