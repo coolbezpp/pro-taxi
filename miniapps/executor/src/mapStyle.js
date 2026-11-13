@@ -13,18 +13,25 @@ let installed = false;
 export function installPmtilesProtocol() {
   if (installed) return;
   installed = true;
-  addProtocol("pmtiles", new Protocol().tilejson);
+  // pmtiles v4: у Protocol хендлер называется tile, метода tilejson нет.
+  // Раньше addProtocol получал undefined: источник pmtiles всегда падал,
+  // тайлы с нашего сервера не запрашивались вовсе, и карта жила только
+  // на фолбэке с внешнего CDN (на мобильном интернете он недоступен).
+  addProtocol("pmtiles", new Protocol().tile);
 }
 
 // Компактный стиль под задачи такси: вода, парки, дороги, здания, подписи.
-// Шрифты и иконки берём у OpenFreemap (это не геоданные, только glyph/sprite).
-const OFM = "https://tiles.openfreemap.org";
+// Глифы (шрифты подписей) отдаём сами - тем же nginx, что и тайлы:
+// каталог osm/data/tiles/fonts наполняет scripts/fetch_fonts.sh.
+// Внешний CDN шрифтов на мобильном интернете часто недоступен, из-за
+// него подписи и фолбэк не грузились. Спрайт убран: в стиле нет слоёв
+// с иконками (icon-image), лишний запрос к внешнему CDN только мешал.
+const GLYPHS = "https://procityservice.ru/tiles/fonts/{fontstack}/{range}.pbf";
 
 export function makeStyle() {
   return {
     version: 8,
-    glyphs: `${OFM}/fonts/{fontstack}/{range}.pbf`,
-    sprite: `${OFM}/sprites/ofm_f384/ofm`,
+    glyphs: GLYPHS,
     sources: {
       osm: {
         type: "vector",
